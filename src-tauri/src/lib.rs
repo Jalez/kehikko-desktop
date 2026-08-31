@@ -132,6 +132,22 @@ pub fn run() {
                     }
                 };
 
+                // Before spawning: is the toolchain even reachable? An app
+                // launched from Finder has none of the shell profile that puts
+                // `~/.bun/bin` on the path, and `run.sh` ends in `exec bunx`.
+                // Without this the window waits two minutes for a port that was
+                // never going to open. See `host::launch_path`.
+                if host::finds_bun().is_none() {
+                    say(&handle, &format!(
+                        "No `bun` could be found. An app launched from Finder does not inherit your shell, so \
+                         `~/.bun/bin` is not on its path — and {} ends in `exec bunx vite`. \
+                         Install bun where the shell looks (~/.bun/bin, /opt/homebrew/bin, /usr/local/bin), or \
+                         launch Kehikot from a terminal, where your own path applies.",
+                        script.display()
+                    ), Phase::Failed);
+                    return;
+                }
+
                 say(&handle, &format!("Starting the host in {}…", settings.dir.display()), Phase::Starting);
 
                 let child = match host::start(&settings.dir, &script, settings.api_port) {
@@ -148,8 +164,47 @@ pub fn run() {
                 GROUP.store(pgid, Ordering::SeqCst);
                 arm_terminal_signals();
 
-                if host::wait_until_up(page_port, Duration::from_secs(120)) {
+                // Waiting on the port alone is waiting for something that may
+                // already have given up: `run.sh` can exit in under a second
+                // (a missing binary, a held port) and waiting only on the port
+                // then sat for two minutes before saying anything. Watch the
+                // child as well, and let whichever happens first decide.
+                //
+                // The two minutes stay, for the case they were chosen for: a
+                // first run installs dependencies, and a budget that gave up at
+                // five seconds would report a broken host to everybody who had
+                // just cloned one. A budget is for a host that is slow. A child
+                // that has exited is not slow, and no longer waits one out.
+                let mut child = child;
+                let mut exited: Option<std::process::ExitStatus> = None;
+                let deadline = std::time::Instant::now() + Duration::from_secs(120);
+                let mut up = false;
+                while std::time::Instant::now() < deadline {
+                    if host::listening(page_port) {
+                        up = true;
+                        break;
+                    }
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            exited = Some(status);
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+
+                if up {
                     go(&handle, &page);
+                } else if let Some(status) = exited {
+                    say(&handle, &format!(
+                        "{} stopped on its own ({status}) without anything answering on {page}. \
+                         Run it in a terminal from {} to see what it printed — the reason is there and it is \
+                         usually a missing tool, a port already held, or a failed `bun install`.",
+                        script.display(),
+                        settings.dir.display()
+                    ), Phase::Failed);
                 } else {
                     say(&handle, &format!(
                         "The host was started in {} but nothing answered on {page} within two minutes. Look at the terminal this was launched from: run.sh prints why it failed there, and it is usually a port already held or a failed `bun install`.",

@@ -15,7 +15,7 @@ use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The API port. The page is always this plus one — `run.sh` computes it that
 /// way (`--port "$((PORT + 1))"`) and nothing here is entitled to a different
@@ -234,6 +234,7 @@ pub fn start(dir: &Path, script: &Path, api_port: u16) -> std::io::Result<Child>
     let mut cmd = Command::new(script);
     cmd.current_dir(dir)
         .env("PORT", api_port.to_string())
+        .env("PATH", launch_path())
         .env(ORIGIN_VAR, origin_value(api_port + 1))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -248,20 +249,70 @@ pub fn start(dir: &Path, script: &Path, api_port: u16) -> std::io::Result<Child>
     cmd.spawn()
 }
 
-/// Wait for the page to answer, or give up saying how long it waited.
+/// A `PATH` that can actually find `bun`.
 ///
-/// A first run installs dependencies (`bun install`), so the budget is generous
-/// rather than snappy: a window that gave up at five seconds would report a
-/// broken host every time somebody cloned one.
-pub fn wait_until_up(port: u16, budget: Duration) -> bool {
-    let deadline = Instant::now() + budget;
-    while Instant::now() < deadline {
-        if listening(port) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(250));
+/// ## The failure this exists for
+///
+/// An app launched from Finder does not inherit your shell. It gets
+/// `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else — none of `.zprofile`,
+/// none of `.zshrc`, none of whatever put `~/.bun/bin` on your path. `run.sh`
+/// ends in `exec bunx vite`, so the whole thing dies on:
+///
+/// ```text
+/// ./run.sh: line 130: exec: bunx: not found
+/// ```
+///
+/// Reproduced exactly by running `run.sh` with that minimal `PATH`. It is the
+/// difference between a shell that works when you launch it from a terminal —
+/// where every developer tests it — and one that never starts when a person
+/// clicks the icon, which is the only way it will actually be used.
+///
+/// So the usual homes for a per-user toolchain are prepended to whatever we
+/// were given. Prepended rather than replacing, because a person with a
+/// deliberately arranged environment should keep it; and additive rather than
+/// clever, because sourcing somebody's shell profile to find out means running
+/// their shell profile, which is a much larger promise than finding a binary.
+fn launch_path() -> String {
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    let mut parts: Vec<String> = Vec::new();
+    if !home.is_empty() {
+        parts.push(format!("{home}/.bun/bin"));
+        parts.push(format!("{home}/.local/bin"));
+        parts.push(format!("{home}/.cargo/bin"));
+        parts.push(format!("{home}/.nvm/current/bin"));
     }
-    false
+    parts.push("/opt/homebrew/bin".into());
+    parts.push("/usr/local/bin".into());
+
+    // Keep only what is actually there, so the variable stays readable in a log.
+    let mut path: Vec<String> = parts
+        .into_iter()
+        .filter(|p| Path::new(p).is_dir())
+        .collect();
+
+    for existing in inherited.split(':').filter(|p| !p.is_empty()) {
+        if !path.iter().any(|p| p == existing) {
+            path.push(existing.to_string());
+        }
+    }
+    path.join(":")
+}
+
+/// Is there a `bun` on the path we are about to hand `run.sh`?
+///
+/// Checked before spawning, because the alternative is a two-minute wait for a
+/// port that was never going to open. A missing toolchain is a sentence, not a
+/// timeout.
+pub fn finds_bun() -> Option<PathBuf> {
+    for dir in launch_path().split(':') {
+        let candidate = Path::new(dir).join("bun");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Signal the group we started: TERM, a grace period, then KILL.
