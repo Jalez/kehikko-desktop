@@ -193,6 +193,16 @@ fn main() {
     // the traffic lights do.
     let fullscreen = args.iter().any(|a| a == "--fullscreen");
     args.retain(|a| a != "--fullscreen");
+    // `--freeze-when-backgrounded` skips the WebKit SPI the shell now applies,
+    // reproducing the behaviour this window had before `src/rendering.rs`
+    // existed. Both sides have to be reachable from one binary, because "the
+    // SPI fixed it" is a claim about a difference, and a difference needs a
+    // before to measure against. Run the probe with kehikko-terminal's
+    // `dev/frozen-while-backgrounded.js` once with this flag and once without,
+    // click on another application in the middle of each, and compare the `raf`
+    // column against the `vis` column.
+    let freeze = args.iter().any(|a| a == "--freeze-when-backgrounded");
+    args.retain(|a| a != "--freeze-when-backgrounded");
     let urls: Vec<String> = args;
     if urls.is_empty() {
         eprintln!("usage: webkit-probe <url> [url…]");
@@ -218,6 +228,9 @@ fn main() {
                     .hidden_title(true);
             }
             let window = b.build()?;
+            if !freeze {
+                kehikko_desktop_lib::keep_rendering_while_backgrounded(&window);
+            }
             kehikko_desktop_lib::watch_fullscreen(&window);
             if fullscreen {
                 let w = window.clone();

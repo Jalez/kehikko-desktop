@@ -14,7 +14,16 @@
 //! as in a browser tab. From a module's point of view this window is a browser.
 
 mod host;
+mod rendering;
 mod titlebar;
+
+/// Keep the page painting while another app is frontmost, exposed so the probe
+/// example can build a window that behaves exactly like the shell's — which is
+/// the only way to measure whether it worked, since the shell has no eval
+/// hatch. See `rendering.rs` for the measurement and the private-API trade-off.
+pub fn keep_rendering_while_backgrounded(window: &tauri::WebviewWindow) {
+    rendering::keep_rendering_while_backgrounded(window)
+}
 
 /// The title-bar injection, exposed so the probe example can build a window
 /// that behaves exactly like the shell's. Nothing else uses it.
@@ -99,6 +108,12 @@ pub fn run() {
             }
 
             let window = builder.build()?;
+
+            // Before anything is shown in it. Without this the page stops
+            // painting the moment another app is frontmost — the whole window,
+            // not only the terminal — and everything written while you were
+            // looking elsewhere arrives in one burst when you come back.
+            rendering::keep_rendering_while_backgrounded(&window);
 
             watch_fullscreen(&window);
 

@@ -220,10 +220,57 @@ it found to a listener on 4999. It starts nothing and stops nothing.
 | **The focus-mode reveal** | **Works.** `elementFromPoint` finds the 8px opt-in strip through a `pointer-events: none` ancestor, which is the mechanism the reveal is built on. |
 | **`:has()`, `OffscreenCanvas`, canvas 2D, WebGL 1 and 2, WebSocket** | **All present.** One caveat with teeth: WebGL reports **unavailable on a canvas that is not in the document**. Attach it and both contexts are there. A feature test on a detached canvas would have been recorded here as "WebGL is broken". |
 | **macOS local-network permission** | **No prompt, and nothing refused.** Loopback is exempt from the local-network permission — that covers LAN, not `127.0.0.1`. The window loaded `http://127.0.0.1:4181` and a cross-origin `XMLHttpRequest` to another loopback port succeeded, first run, with no dialog. |
-| **`requestAnimationFrame`** | **Works, with a caveat.** When the window is occluded or in the background, `document.visibilityState` goes `hidden` and rAF **stops firing entirely** — not throttled, stopped. Browsers do this too, but a module that waits on a rAF before reporting its height will appear to hang if it is loaded into a window nobody is looking at. Anything that must complete off-screen should use a timer. This cost an hour of this build: a probe that awaited two rAFs simply never finished. |
+| **`requestAnimationFrame`** | **Worked, with a caveat, until the shell took the caveat away — see the section below.** An earlier version of this table said "when the window is occluded or in the background", and *occluded* was the wrong word and the expensive one. **Losing frontmost is enough.** The window does not need to be covered, minimised, moved off screen or obscured by so much as a pixel: click on Finder while the whole window is in plain sight, and `document.visibilityState` goes `hidden` and rAF **stops firing entirely** — not throttled, stopped, zero frames per second for as long as you look elsewhere. A `setInterval` beside it keeps ticking, so the page is still running; only the rendering update is suspended. `src/rendering.rs` now turns this off for the shell's window. It is still true of any WKWebView that does not, so: anything that must complete while the app is not frontmost should use a timer, never a rAF. It cost an hour of the original build — a probe that awaited two rAFs simply never finished — and a day of the one after it. |
 | **xterm.js with a live pty** | **Not verified.** Its substrate is fine — `.xterm`, `.xterm-screen`, `.xterm-rows` and `.xterm-viewport` all construct, and canvas, WebGL and WebSocket are all present — but no shell could be started to draw into it. The Terminal module reports "a shell could not be started on this machine", which is its `node-pty` import failing in the module's own server process, with no webview involved. That is a condition on this machine today, not a WebKit finding, and it will reproduce in Chromium. Verifying it framed would have meant unfolding a container on a canvas this task was not allowed to change. |
 
-Nothing was found broken. Nothing here needs a module change.
+Nothing in that table needs a module change. One thing in it needed a shell
+change, and got one.
+
+### The frozen window, and the private call that unfreezes it
+
+The reported sentence was: *"only by switching to another app it shows what has
+been written."* Typing into the terminal produced nothing on screen until the
+window lost focus and got it back, and then the whole backlog landed at once.
+
+It is the rAF row above, and it is not the terminal's bug. xterm draws every row
+inside an animation frame, funnelled through one `RenderDebouncer` that all
+three of its renderers — DOM, canvas and WebGL — sit behind, so the frame that
+never arrives is the whole of the rendering. The pty keeps producing, the socket
+keeps delivering and `terminal.write()` keeps parsing into the buffer; none of
+that is rAF-driven, which is exactly why the backlog is intact when the window
+comes back. **It affects every module.** The terminal is only the one that
+changes while you are not looking at it.
+
+`src/rendering.rs` sends `-[WKWebView _setWindowOcclusionDetectionEnabled:NO]`
+to the window's webview at startup. Measured with the probe, driving
+`kehikko-terminal/dev/frozen-while-backgrounded.js`, one line per second,
+clicking on Finder in the middle of each run:
+
+```
+--freeze-when-backgrounded (the behaviour before this fix)
+  {"s":4, "raf":60,"vis":"visible"}
+  {"s":5, "raf":4, "vis":"hidden"}     <- Finder frontmost
+  {"s":6, "raf":0, "vis":"hidden"}
+  {"s":9, "raf":0, "vis":"hidden"}
+  {"s":11,"raf":61,"vis":"visible"}    <- window frontmost again
+
+with the SPI applied (what the shell now does)
+  {"s":1..30, "raf":60, "vis":"visible"}   every second, no exceptions
+```
+
+Thirty seconds, two switches to Finder and back, and the page never once went
+`hidden`. Same binary, same script, same automated app switch — the only
+difference is the one call.
+
+**It is private API, and that is a distribution decision, not a detail.** The
+leading underscore says so. There is no public equivalent; it was looked for.
+That is fine for an app somebody builds and installs on their own machine, and
+it is a rejection in the Mac App Store, where the check is automated and the
+selector is a plain string in the binary. Submitting this means deleting that
+call and getting the freeze back. Notarisation for direct distribution does not
+care. The call is guarded with `respondsToSelector:`, so a future macOS that
+drops the SPI gets a log line and the old behaviour rather than a crash on
+launch.
 
 ### Two things that are true of the shell, not of WebKit
 
@@ -260,6 +307,7 @@ which is where it is.
 src-tauri/src/lib.rs        the window, the waiting room, and the reaping
 src-tauri/src/host.rs       where the host is, whether it is up, how to stop it
 src-tauri/src/titlebar.rs   the injection, and the argument against it
+src-tauri/src/rendering.rs  one private WebKit call, so the page keeps painting
 src-tauri/capabilities/     two window commands, scoped to one origin
 src-tauri/examples/         the WebKit probe that produced the table above
 dist/index.html             the only page this shell serves: a waiting room

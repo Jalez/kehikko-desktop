@@ -17,5 +17,28 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 libc = "0.2"
 
+# Objective-C message sending, for exactly one call: the WebKit SPI in
+# `src/rendering.rs` that stops the page freezing when another app is frontmost.
+#
+# `objc2` rather than the older `objc`, and the major pinned to the one already
+# in the tree. wry — which is what actually creates this window's WKWebView —
+# depends on objc2 0.6 and objc2-web-kit 0.3, so asking for the same major buys
+# a unified graph: no second copy of the runtime compiled in, no chance of two
+# `Sel`/`AnyObject` types that look identical and are not, and nothing new to
+# build (measured: `cargo build` after adding this compiled zero extra crates).
+# The older `objc` crate would have added a genuinely separate runtime binding
+# beside the one wry already links, for a call that is a single `msg_send!`. It
+# is also unmaintained; objc2 is where the safety work — autorelease, `Bool`,
+# the exception handling — actually happens.
+#
+# objc2-web-kit is deliberately NOT here, despite already being in the tree. Its
+# generated `WKWebView` cannot declare `_setWindowOcclusionDetectionEnabled:` —
+# private API comes from no public header — so it would buy one cast's worth of
+# type-checking on a pointer Tauri hands over as `*mut c_void` anyway, and the
+# selector would still be registered and sent by hand. A dependency that changes
+# nothing at the call site is a dependency to leave out.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 [profile.release]
 strip = true
