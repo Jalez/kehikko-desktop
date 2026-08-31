@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "A window on the Kehikot workbench, and the thing that owns the host's lifetime.",
   "scripts": {
+    "prebuild": "mkdir -p src-tauri/target && touch src-tauri/target/.metadata_never_index",
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri"
