@@ -1,0 +1,21 @@
+[package]
+name = "kehikko-desktop"
+version = "0.1.0"
+description = "A window on the Kehikot workbench"
+authors = ["Jaakko Rajala"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "kehikko_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+libc = "0.2"
+
+[profile.release]
+strip = true

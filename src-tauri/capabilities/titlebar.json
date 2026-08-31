@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "titlebar",
+  "description": "The two window commands a title bar needs, and nothing else, granted to the host's own origin.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:4181", "http://localhost:4181"]
+  },
+  "permissions": ["core:window:allow-start-dragging", "core:window:allow-toggle-maximize"]
+}

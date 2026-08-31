@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kehikot</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        height: 100%;
+        margin: 0;
+        font: 15px/1.6 ui-sans-serif, -apple-system, system-ui, sans-serif;
+        background: Canvas;
+        color: CanvasText;
+      }
+      main {
+        height: 100%;
+        display: grid;
+        place-content: center;
+        justify-items: start;
+        max-width: 46rem;
+        margin: 0 auto;
+        padding: 2rem;
+        gap: 0.75rem;
+      }
+      h1 { font-size: 1.05rem; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+      p { margin: 0; white-space: pre-wrap; opacity: 0.85; }
+      .mark { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.09em; opacity: 0.5; }
+      body[data-phase="failed"] h1 { color: #b3261e; }
+      @media (prefers-color-scheme: dark) {
+        body[data-phase="failed"] h1 { color: #f2b8b5; }
+      }
+    </style>
+  </head>
+  <body data-phase="starting">
+    <!--
+      The only page this shell serves itself, and it is a waiting room.
+
+      It exists so that a shell which cannot start a host still has somewhere to
+      say so. The failure it is written for is a wrong host directory: without
+      this page that failure is a white window, or no window, and the reason is
+      in a terminal the person may not have open.
+
+      It never frames anything and it never becomes the workbench. The moment
+      the host answers, the window navigates to the host's own page and this
+      document is gone.
+    -->
+    <main>
+      <span class="mark">Kehikot</span>
+      <h1 id="headline">Starting the host…</h1>
+      <p id="detail">Looking for the workbench on 127.0.0.1:4181.</p>
+    </main>
+    <script>
+      // Called from Rust with `eval`. Text only — a path is set with
+      // textContent, never innerHTML, so a folder with a bracket in its name is
+      // a folder and not markup.
+      window.kehikkoStatus = function (phase, message) {
+        document.body.dataset.phase = phase;
+        document.getElementById('headline').textContent = {
+          starting: 'Starting the host…',
+          adopted: 'A host was already running',
+          failed: 'The workbench did not start',
+        }[phase] || 'Kehikot';
+        document.getElementById('detail').textContent = message;
+      };
+    </script>
+  </body>
+</html>
