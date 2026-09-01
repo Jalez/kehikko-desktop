@@ -8,13 +8,21 @@
 //! that reimplements one of them is a second copy to keep in agreement with the
 //! first.
 //!
-//! Nothing here touches Tauri's IPC, and no module ever will. A module is an
-//! HTTP server on its own origin, framed in an iframe, talking `postMessage` to
-//! the page that framed it. That page is the host's, served over http, exactly
-//! as in a browser tab. From a module's point of view this window is a browser.
+//! **No module ever touches Tauri's IPC.** A module is an HTTP server on its
+//! own origin, framed in an iframe, talking `postMessage` to the page that
+//! framed it. That page is the host's, served over http, exactly as in a
+//! browser tab. From a module's point of view this window is a browser, and
+//! initialization scripts were measured not to reach subframes, so a module
+//! cannot see the bridge even if it looks for one.
+//!
+//! The host's own page touches it, in one direction, for one word. This program
+//! carried no `invoke_handler` at all until the theme needed to survive a quit
+//! — see `remember_theme` at the bottom of this file for what was weighed. Talk
+//! yourself out of the second command before you add it.
 
 mod host;
 mod rendering;
+mod theme;
 mod titlebar;
 
 /// Keep the page painting while another app is frontmost, exposed so the probe
@@ -71,9 +79,15 @@ static GROUP: AtomicI32 = AtomicI32::new(0);
 
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![remember_theme])
         .setup(|app| {
             let settings = host::settings();
             let page_port = settings.api_port + 1;
+
+            // Read before the window is built, because it decides the very
+            // first frame. See `theme.rs`: this is an echo of the host's
+            // cookie, not a second opinion about it.
+            let seen = theme::remembered();
 
             // The window opens NOW, on a local page, and says what it is doing.
             // The alternative — block until the host answers, then open — is a
@@ -83,6 +97,28 @@ pub fn run() {
                 .title("Kehikot")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 600.0)
+                // The very first frame, before any HTML exists to have an
+                // opinion. A window with no background colour is white, and it
+                // is on screen before the waiting room has been parsed — so
+                // somebody who runs this workbench dark got a white rectangle
+                // on every launch that no stylesheet could have prevented.
+                //
+                // On macOS this reaches two things and misses a third, which is
+                // worth knowing before trusting it. It sets the `NSWindow`'s
+                // background colour (the frame above), and `underPageBackground`
+                // on the webview, which is what WebKit shows around and behind
+                // a page that has not painted yet. It does NOT reach the
+                // webview's own opaque backdrop: wry only disables that through
+                // a private `drawsBackground` key compiled in behind Tauri's
+                // `macos-private-api` feature, which is not enabled here and is
+                // not worth enabling for this. That is why the waiting room
+                // also states its own two colours inline — belt and braces, and
+                // the same belt the host's `index.html` wears.
+                .background_color(seen.color())
+                // The theme, handed to the page before the page is parsed. The
+                // waiting room cannot read the host's cookie — different origin
+                // — so it is told. See `theme.rs`.
+                .initialization_script(theme::script(seen))
                 // Injected before every page load, the host's included. See
                 // `titlebar.rs` for what it does and what is wrong with doing
                 // it this way.
@@ -287,7 +323,10 @@ enum Phase {
 /// other people's programs in iframes. The shell needs to say three sentences.
 /// It does not need a bridge to say them.
 ///
-/// So: no IPC, no capabilities file, no commands. The message is passed as a
+/// So: no bridge on the waiting room, and nothing for it to call. (There is one
+/// application command now — `remember_theme`, at the bottom of this file — and
+/// it goes the other way, from the host's page into this program. It does not
+/// weaken this argument; it is what remains after it.) The message is passed as a
 /// JSON string and the page sets it with `textContent`, so a directory name
 /// with a `<` in it is a directory name and not markup.
 fn say(handle: &tauri::AppHandle, message: &str, phase: Phase) {
@@ -373,4 +412,63 @@ extern "C" fn handle_terminal_signal(sig: libc::c_int) {
         }
     }
     unsafe { libc::_exit(128 + sig) }
+}
+
+/// The host's page telling this shell what theme it is showing.
+///
+/// ## This is the only command, and it is new ground
+///
+/// Until this existed there was no `invoke_handler` in this program at all, and
+/// `say()` above is a small essay on why: the shell says three sentences to the
+/// waiting room with `eval`, which needs no bridge, no `withGlobalTauri` and no
+/// JavaScript API on a page that is about to frame other people's programs.
+/// That argument is still right and still applies — in that direction.
+///
+/// This direction has no such option. The theme has to be known by the code
+/// that builds the window, because the window is painted before any page runs;
+/// so a fact that only the page knows has to cross to this side, once, when it
+/// changes. The alternatives were weighed and are worse:
+///
+/// - **Read the cookie from Rust.** It is the browser's cookie jar, in the
+///   webview's own storage, and prising it out means either a private WebKit
+///   call or a second implementation of the host's decision — which is the one
+///   thing `src/host/theme.ts` argues hardest against.
+/// - **Reuse the window title as a channel**, the way the title-bar injection
+///   reports a missed header. That works because it is a one-shot diagnostic
+///   read once, eight seconds in. A preference that changes whenever somebody
+///   presses a button would need polling, and polling for a string in a title
+///   is a worse mechanism than the one Tauri ships, not a smaller one.
+///
+/// So: one command, one word, one direction, no reply. Adding a second is a
+/// decision to make on its own merits and not a precedent this one sets.
+///
+/// ## What keeps it narrow
+///
+/// The host's page is a **remote** origin as far as Tauri is concerned, and
+/// remote content cannot reach an application command unless a capability names
+/// it — measured in `tauri`'s `webview/mod.rs`, which rejects the call outright
+/// otherwise. `capabilities/theme.json` grants exactly this one command to
+/// window `main` at the host's two loopback origins, and `permissions/theme.toml`
+/// is what makes the command nameable at all. A module cannot call it: an
+/// initialization script never reaches a subframe, so a module has no
+/// `__TAURI_INTERNALS__` to call through, and the capability would refuse the
+/// origin even if it did.
+///
+/// Nothing is returned and nothing is validated beyond the two words. A word
+/// that is not one of them is dropped rather than stored, so the worst a
+/// confused caller achieves is leaving the previous answer in place.
+#[tauri::command]
+fn remember_theme(app: tauri::AppHandle, theme: String) {
+    let Some(seen) = theme::from_page(&theme) else {
+        return;
+    };
+    theme::remember(seen);
+
+    // And repaint the window behind the page, so a toggle that happens now is
+    // also the colour of the frame this window shows while it is being resized,
+    // and of the overscroll at the edges of the canvas. Cheap, and it keeps the
+    // running window in the state the next cold start will open in.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_background_color(Some(seen.color()));
+    }
 }

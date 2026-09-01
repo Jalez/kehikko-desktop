@@ -200,6 +200,110 @@ repository was not this task's to edit.
 
 ---
 
+## Dark from the first frame, which means the native side has to know
+
+Somebody who runs Kehikot dark and quits it used to be shown two white frames on
+the way back in. They are two different bugs that look like one flash:
+
+1. **The window.** An `NSWindow` built with no `background_color` is white, and
+   it is on screen before a byte of HTML has been parsed. Nothing in a page can
+   reach that frame.
+2. **The waiting room.** `dist/index.html` painted itself with the system
+   colours — `color-scheme: light dark; background: Canvas` — which follows the
+   **operating system's** appearance. A person's choice about this workbench is
+   not a fact about their Mac, so a dark-mode Kehikot user on a light-mode
+   machine got a white screen, correctly implemented and entirely wrong.
+
+The host's page has neither problem: it decides the theme from a
+`kehikko.theme` cookie in a blocking script before its body exists and states
+its two background colours inline, and its comments are the long version. **But
+that cookie is on `http://127.0.0.1:4181` and the waiting room is served at
+`tauri://localhost`.** Different origin, nothing to read. So the shell has to be
+told.
+
+### Which copy is the truth
+
+**The host's cookie. Always.** `~/.config/kehikko-desktop/theme` — one word,
+beside the config file, never inside it, because `config.json` is hand-written
+and holds what a person was asked for rather than what was observed — is an
+*echo*: "what the host's page last said it was showing". The shell never
+computes a theme, never consults the system appearance and never writes the
+cookie.
+
+So a disagreement costs exactly one wrong frame in the waiting room and repairs
+itself: the host's page reports what it decided as soon as it loads (`announce()`
+in the host's `src/host/theme.ts`, called from `main.tsx`), so it survives one
+launch and not two. That is a stale cache, not a second decision — the thing
+`src/host/theme.ts` argues hardest against, and still only one decision exists.
+
+**On a first run, with nothing stored, it is dark** — because the host defaults
+to dark and defends that at length. Following the OS here would not fix the
+flash, it would move it: white for a beat, then black when the host's page
+arrived. Two defaults that disagree are a flash by construction.
+
+### There is now one command, and there were none
+
+`remember_theme`, and adding it was new ground: this program had no
+`invoke_handler` at all. The direction is the reason. `say()` talks to the page
+with `eval` and needs no bridge; a fact that only the page knows and only Rust
+can act on early enough has to go the other way. Reading the cookie from Rust
+would mean a second implementation of the host's decision, and reusing the
+window title as a channel — which the title-bar injection does — works for a
+one-shot diagnostic and would need polling for a preference.
+
+It is narrow by construction. The host's page is a **remote** origin to Tauri,
+and remote content cannot reach an application command unless a capability names
+it; `capabilities/theme.json` grants this one command to window `main` at the
+host's two loopback origins, and `permissions/theme.toml` is what makes it
+nameable at all. A module cannot call it — initialization scripts do not reach
+subframes, so a module has no `__TAURI_INTERNALS__`, and the capability would
+refuse the origin anyway. **Note the port is hard-coded there, as it is in
+`titlebar.json`:** a host on a non-default port simply never gets through, and
+the shell keeps the last word it had.
+
+In the host repo it degrades silently in a browser — `__TAURI_INTERNALS__` is
+undefined, `tell()` returns, nothing is logged. That page runs in a plain tab far
+more often than in this window.
+
+### What `background_color` does on macOS, and what it does not
+
+Do not assume it covers everything. It reaches two layers and misses a third:
+
+- the `NSWindow`'s background colour — the frame before any page exists;
+- `underPageBackgroundColor` on the `WKWebView`, which is what WebKit shows
+  around and behind a page that has not painted;
+- **not** the webview's own opaque backdrop. wry only turns that off through a
+  private `drawsBackground` key, compiled in behind Tauri's `macos-private-api`
+  feature, which is not enabled here and is not worth enabling for this.
+
+That third one is why the waiting room also states its two colours inline and
+gets the word through an initialization script — the same belt the host's
+`index.html` wears, for the same reason: a class selects nothing until a
+stylesheet says what it means.
+
+Measured, on a Mac in **light** system appearance, with the window built by
+`cargo build` and launched directly:
+
+| stored | what the waiting room shows |
+|---|---|
+| nothing (first run) | black — the host's default, not the machine's |
+| `light` | white |
+| `dark` | black |
+
+And the round trip: with the file deleted, launching against the real host and
+letting its page load recreated `~/.config/kehikko-desktop/theme` containing
+`dark`, which is `announce()` arriving through the capability. The ACL is the
+part most likely to be silently wrong, so it is the part worth having measured.
+
+It does **not** fight `TitleBarStyle::Overlay`. They are independent settings in
+tao: the title-bar style sets `titlebarAppearsTransparent` and
+`FullSizeContentView`, the colour calls `setBackgroundColor:` on the window, and
+the traffic lights are drawn by the system above both. The window is opaque
+either way — nothing here sets `transparent`, so nothing goes near
+`clearColor`, which is where that combination actually causes trouble.
+
+---
+
 ## What survives on WKWebView, and what does not
 
 Tauri uses the system webview: **WKWebView on macOS, not Chromium.** Everything
@@ -279,7 +383,9 @@ launch.
   injected stylesheet nor `__TAURI_INTERNALS__` in it. So a module cannot see the
   title-bar injection and **cannot call a window command** — the capability below
   reaches the host's page and nothing else.
-- **The capability is two commands wide.** `src-tauri/capabilities/titlebar.json`
+- **The capabilities are three commands wide**, in two files, and the second one
+  is described under "Dark from the first frame" above.
+  `src-tauri/capabilities/titlebar.json`
   grants `core:window:allow-start-dragging` and
   `core:window:allow-toggle-maximize` to window `main` at the host's origin, and
   nothing else. Both were called for real and both returned; `toggle_maximize`
@@ -308,7 +414,9 @@ src-tauri/src/lib.rs        the window, the waiting room, and the reaping
 src-tauri/src/host.rs       where the host is, whether it is up, how to stop it
 src-tauri/src/titlebar.rs   the injection, and the argument against it
 src-tauri/src/rendering.rs  one private WebKit call, so the page keeps painting
-src-tauri/capabilities/     two window commands, scoped to one origin
+src-tauri/src/theme.rs      the remembered theme, and why the copy is not the truth
+src-tauri/capabilities/     three commands, scoped to one window and one origin
+src-tauri/permissions/      what makes this app's own command nameable at all
 src-tauri/examples/         the WebKit probe that produced the table above
 dist/index.html             the only page this shell serves: a waiting room
 ```

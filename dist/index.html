@@ -3,17 +3,57 @@
   <head>
     <meta charset="utf-8" />
     <title>Kehikot</title>
+    <!--
+      The theme, applied before this page has painted a single frame.
+
+      This used to be `color-scheme: light dark` with `background: Canvas`,
+      which follows the OPERATING SYSTEM's appearance — and the person's choice
+      about Kehikot is not a fact about their Mac. Somebody who runs this
+      workbench dark on a light-mode machine got a white screen here on every
+      launch, and then a black canvas a second later when the host's page
+      arrived. Correct system-colour usage; wrong program.
+
+      It cannot be read from where the host keeps it. The host decides the theme
+      from a `kehikko.theme` cookie on `http://127.0.0.1:4181`, in a blocking
+      script in its own `index.html`; this page is served at `tauri://localhost`,
+      and a cookie on one origin is invisible to the other. So this page is
+      TOLD: `src-tauri/src/theme.rs` injects an initialization script that puts
+      the word on `window.__kehikkoDesktopTheme` before this document is parsed,
+      the shell having read it from a file it wrote the last time the host said
+      what it was showing.
+
+      Dark unless told light — the same default the host has, and defended in
+      the same place. Two defaults that disagree would not fix the flash, they
+      would move it: white here for a beat, then black when the host's page
+      loads. And when the shell has never been told anything (a first run), dark
+      is what the host is about to show.
+
+      The two colours are the host's `--background` at each end — `oklch(0 0 0)`
+      and `oklch(1 0 0)` — stated inline for the reason the host's index.html
+      states them inline: a class selects nothing until a stylesheet says what
+      it means, and this is the whole screen. `theme.rs` holds them a third time
+      as the window's own colour, because AppKit does not read stylesheets.
+    -->
     <style>
+      html {
+        color-scheme: dark;
+        background: oklch(0 0 0);
+        color: oklch(0.92 0 0);
+      }
+      html.light {
+        color-scheme: light;
+        background: oklch(1 0 0);
+        color: oklch(0.2 0 0);
+      }
       :root {
-        color-scheme: light dark;
-        --ink: CanvasText;
+        --ink: currentColor;
       }
       html, body {
         height: 100%;
         margin: 0;
         font: 15px/1.6 ui-sans-serif, -apple-system, system-ui, sans-serif;
-        background: Canvas;
-        color: CanvasText;
+        background: inherit;
+        color: inherit;
       }
       main {
         height: 100%;
@@ -79,7 +119,7 @@
          mark goes quiet. Saying it twice — in the words and in the mark — is
          the point; somebody glancing at the window should not have to read. */
       body[data-phase='failed'] .built { animation: none; opacity: 0.32; }
-      body[data-phase='failed'] h1 { color: color-mix(in oklab, CanvasText 70%, red); }
+      body[data-phase='failed'] h1 { color: color-mix(in oklab, currentColor 70%, red); }
 
       /* Somebody who asked for less movement gets the finished frame and no
          drawing, rather than a still frame of a half-built one. */
@@ -88,6 +128,32 @@
         .built { animation: none; }
       }
     </style>
+    <!--
+      A plain blocking script in the head, not a module and not at the end of
+      the body, for the reason the host's page gives at length: a deferred
+      script runs after the browser has already painted, and nothing further
+      down can undo a frame that has been shown. The class lands on `<html>`
+      before the body exists, and there is nothing left to correct.
+
+      This READS what the shell decided. It does not decide anything — there is
+      one decision about the theme in this whole system and it is the host's,
+      made from its cookie; `theme.rs` explains what happens on the rare
+      occasions the shell's copy of the answer has gone stale.
+    -->
+    <script>
+      ;(function () {
+        try {
+          if (window.__kehikkoDesktopTheme === 'light') {
+            document.documentElement.classList.add('light')
+          }
+        } catch (_) {
+          /* Nothing was injected — this page opened in something that is not
+             the shell. Dark, like everybody the host has not been told
+             otherwise about. A theme is not worth an exception thrown before
+             the window has said what it is doing. */
+        }
+      })()
+    </script>
   </head>
   <body>
     <!--

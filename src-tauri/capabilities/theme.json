@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "theme",
+  "description": "One command, one direction: the host's page tells the shell which theme it is showing, so the next cold start paints the window in that colour before any HTML exists. Granted to the host's own origin and to no other, and to the one window this app has.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:4181", "http://localhost:4181"]
+  },
+  "permissions": ["allow-remember-theme"]
+}
