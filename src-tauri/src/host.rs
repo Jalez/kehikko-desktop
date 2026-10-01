@@ -77,6 +77,22 @@ pub fn settings() -> Settings {
     }
 }
 
+/// The variable that tells a host we started where to ask for a restart.
+///
+/// A file rather than an exit code: the child we hold is Vite (`run.sh` ends in
+/// `exec bunx vite`), and the API that knows an update needs a restart is a
+/// grandchild whose exit nobody here sees. The host writes the file; the shell
+/// watches for it. A host we did not start never gets the variable, so it never
+/// offers a restart nothing would carry out.
+pub const RESTART_VAR: &str = "KEHIKKO_RESTART_FILE";
+
+pub fn restart_file() -> PathBuf {
+    home()
+        .join(".config")
+        .join("kehikko-desktop")
+        .join("restart-request")
+}
+
 pub fn config_path() -> PathBuf {
     home()
         .join(".config")
@@ -236,6 +252,7 @@ pub fn start(dir: &Path, script: &Path, api_port: u16) -> std::io::Result<Child>
         .env("PORT", api_port.to_string())
         .env("PATH", launch_path())
         .env(ORIGIN_VAR, origin_value(api_port + 1))
+        .env(RESTART_VAR, restart_file())
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
