@@ -204,6 +204,11 @@ pub fn run() {
 
                 say(&handle, &format!("Starting the host in {}…", settings.dir.display()), Phase::Starting);
 
+                /* A request left over from a restart that never happened (the
+                   app was killed between the write and the watch) must not
+                   restart this fresh start the moment it is up. */
+                let _ = std::fs::remove_file(host::restart_file());
+
                 let child = match host::start(&settings.dir, &script, settings.api_port) {
                     Ok(child) => child,
                     Err(e) => {
@@ -251,6 +256,7 @@ pub fn run() {
 
                 if up {
                     go(&handle, &page, shown);
+                    watch_for_restart(handle.clone());
                 } else if let Some(status) = exited {
                     say(&handle, &format!(
                         "{} stopped on its own ({status}) without anything answering on {page}. \
@@ -382,6 +388,25 @@ fn quote(s: &str) -> String {
 /// its API, and every module the host itself started is stopped by the host on
 /// its own way out — a KILL first would skip both and leave exactly the ports
 /// this program exists to not leave behind.
+/// Restart the whole app when the host asks to.
+///
+/// The host's update modal writes `host::restart_file()` after pulling code its
+/// server needs to be restarted for. The host is stopped here, explicitly,
+/// before restarting: `restart()` does not pass through the exit events that
+/// normally reap it, and an app that came back to find the old host still on
+/// its port would adopt it — the exact stale server the restart was for.
+fn watch_for_restart(handle: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let file = host::restart_file();
+        if file.exists() {
+            let _ = std::fs::remove_file(&file);
+            reap();
+            handle.restart();
+        }
+    });
+}
+
 fn reap() {
     let pgid = GROUP.swap(0, Ordering::SeqCst);
     if pgid == 0 {
