@@ -154,6 +154,9 @@ pub fn run() {
             watch_fullscreen(&window);
 
             let handle = app.handle().clone();
+            /* When the waiting room went up, so leaving it can wait for the
+               mark to finish drawing — see `go`. */
+            let shown = std::time::Instant::now();
             std::thread::spawn(move || {
                 let page = format!("http://127.0.0.1:{page_port}");
 
@@ -166,7 +169,7 @@ pub fn run() {
                     say(&handle, &format!(
                         "Found a host already answering on {page}. Using it — this window will not stop it when you quit, because it did not start it."
                     ), Phase::Adopted);
-                    go(&handle, &page);
+                    go(&handle, &page, shown);
                     return;
                 }
 
@@ -247,7 +250,7 @@ pub fn run() {
                 }
 
                 if up {
-                    go(&handle, &page);
+                    go(&handle, &page, shown);
                 } else if let Some(status) = exited {
                     say(&handle, &format!(
                         "{} stopped on its own ({status}) without anything answering on {page}. \
@@ -277,11 +280,22 @@ pub fn run() {
         });
 }
 
+/// How long the waiting room's mark takes to draw itself once: the last strut
+/// starts at 1.8s and draws for 0.4s (`.strut` in `dist/index.html`), plus a
+/// beat to see it whole. Failures do not wait for it; only leaving does.
+const MARK_DRAWN: Duration = Duration::from_millis(2400);
+
 /// Send the host's page to the window.
 ///
 /// `navigate` rather than a second window, so there is exactly one window for
 /// the life of the app and no flash of a second one.
-fn go(handle: &tauri::AppHandle, page: &str) {
+fn go(handle: &tauri::AppHandle, page: &str, shown: std::time::Instant) {
+    /* Not before the mark has drawn itself once. A host that is already
+       running answers at once, and leaving at once cut the cube off mid-line
+       — a flicker of half a drawing rather than a sign of anything. */
+    if let Some(left) = MARK_DRAWN.checked_sub(shown.elapsed()) {
+        std::thread::sleep(left);
+    }
     if let Some(window) = handle.get_webview_window("main") {
         if let Ok(url) = page.parse() {
             let _ = window.navigate(url);

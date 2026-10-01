@@ -52,6 +52,13 @@
         height: 100%;
         margin: 0;
         font: 15px/1.6 ui-sans-serif, -apple-system, system-ui, sans-serif;
+      }
+      /* The body only. This used to say `html, body`, and on `html` it undid
+         the theme: same specificity as the `html` rule above and later, so the
+         root's colour and background became `inherit` — from nothing — and
+         dark mode drew black lines and black words on the browser's default
+         grey. `html.light` outranked it, which is why only light looked right. */
+      body {
         background: inherit;
         color: inherit;
       }
