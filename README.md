@@ -103,12 +103,14 @@ terminal is holding.
 Both of these look like something a tidy-minded person would delete. Neither is
 decoration.
 
-### 1. `ROADMAP_ORIGIN`, set on the host process this shell spawns
+### 1. `KEHIKOT_ORIGIN`, set on the host process this shell spawns
 
-Every module composes its own frame policy from it:
+It is set under its old name, `ROADMAP_ORIGIN`, as well, because modules not
+yet updated still read that one. Every module composes its own frame policy
+from it:
 
 ```js
-frame-ancestors 'self' ${process.env.ROADMAP_ORIGIN ?? 'http://127.0.0.1:4181 http://localhost:4181'}
+frame-ancestors 'self' ${process.env.KEHIKOT_ORIGIN ?? 'http://127.0.0.1:4181 http://localhost:4181'}
 ```
 
 Note the `??`. Setting this variable **replaces** the default rather than adding
@@ -135,7 +137,7 @@ right in both cases is cheaper than one that is right today.
 
 **Modules the host itself spawns inherit this. Modules you start by hand do
 not.** A module you started in your own terminal before opening this window has
-whatever `ROADMAP_ORIGIN` that terminal had — usually none, so the default. That
+whatever `KEHIKOT_ORIGIN` / `ROADMAP_ORIGIN` that terminal had — usually none, so the default. That
 is fine today and would not be if this shell ever moved to `tauri://`. The
 failure to watch for is the ugliest one in this system: **a blank container, with
 the reason only in a console you are not looking at.** If a container is blank,

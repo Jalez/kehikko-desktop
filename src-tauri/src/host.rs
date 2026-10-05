@@ -34,7 +34,11 @@ pub const SIDECAR: &str = "kehikko-host";
 
 /// The name of the environment variable every module reads to decide who may
 /// frame it. See `origin_value()` for what we put in it and why it is a list.
-pub const ORIGIN_VAR: &str = "ROADMAP_ORIGIN";
+pub const ORIGIN_VAR: &str = "KEHIKOT_ORIGIN";
+
+/// The same, under its old name. Modules not yet updated still read this one,
+/// so both are set until every module reads `ORIGIN_VAR`.
+pub const LEGACY_ORIGIN_VAR: &str = "ROADMAP_ORIGIN";
 
 /// What we know about where to start the host, and how we came to know it.
 pub struct Settings {
@@ -274,12 +278,12 @@ pub fn listening(port: u16) -> bool {
     }
 }
 
-/// What we put in `ROADMAP_ORIGIN`, and why it is four values rather than one.
+/// What we put in `KEHIKOT_ORIGIN` (and `ROADMAP_ORIGIN`), and why it is four values rather than one.
 ///
 /// Every module composes its own frame policy from this:
 ///
 /// ```text
-/// frame-ancestors 'self' ${process.env.ROADMAP_ORIGIN ?? 'http://127.0.0.1:4181 http://localhost:4181'}
+/// frame-ancestors 'self' ${process.env.KEHIKOT_ORIGIN ?? 'http://127.0.0.1:4181 http://localhost:4181'}
 /// ```
 ///
 /// Note the `??`: setting this variable REPLACES the default rather than adding
@@ -321,6 +325,7 @@ pub fn start(dir: &Path, script: &Path, api_port: u16) -> std::io::Result<Child>
         .env("PORT", api_port.to_string())
         .env("PATH", launch_path())
         .env(ORIGIN_VAR, origin_value(api_port + 1))
+        .env(LEGACY_ORIGIN_VAR, origin_value(api_port + 1))
         .env(RESTART_VAR, restart_file())
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -348,6 +353,7 @@ pub fn start_sidecar(binary: &Path, port: u16) -> std::io::Result<Child> {
         .env("PORT", port.to_string())
         .env("PATH", launch_path())
         .env(ORIGIN_VAR, origin_value(port))
+        .env(LEGACY_ORIGIN_VAR, origin_value(port))
         .env(RESTART_VAR, restart_file())
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
