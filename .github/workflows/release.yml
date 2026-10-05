@@ -26,8 +26,25 @@ jobs:
     outputs:
       release_id: ${{ steps.release.outputs.id }}
       tag: ${{ steps.version.outputs.tag }}
+      host_sha: ${{ steps.host.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
+
+      # host.ref names a branch, tag or commit of Jalez/kehikko. It is resolved to
+      # one commit here, once, so both architectures bundle the same host and the
+      # release can say exactly which.
+      - name: Resolve the host commit
+        id: host
+        run: |
+          ref="$(tr -d '[:space:]' < host.ref)"
+          if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+            sha="$ref"
+          else
+            sha="$(git ls-remote https://github.com/Jalez/kehikko.git "$ref" "refs/tags/$ref^{}" | awk 'NR==1{print $1}')"
+          fi
+          [ -n "$sha" ] || { echo "::error::host.ref '$ref' does not resolve in Jalez/kehikko"; exit 1; }
+          echo "Host: Jalez/kehikko@$sha (from host.ref '$ref')"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Read the version
         id: version
@@ -45,11 +62,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          HOST_SHA: ${{ steps.host.outputs.sha }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
+            notes="Download Kehikot_*.dmg for your Mac (aarch64 = Apple Silicon, x64 = Intel), open it and drag Kehikot to Applications. Signed with Developer ID and notarized by Apple. Installed copies update themselves.
+
+          Host: [Jalez/kehikko@${HOST_SHA:0:7}](https://github.com/Jalez/kehikko/commit/$HOST_SHA), tagged \`app-$TAG\` there."
             gh release create "$TAG" --draft --target "$GITHUB_SHA" \
-              --title "Kehikot $TAG" \
-              --notes "Download Kehikot_*.dmg for your Mac (aarch64 = Apple Silicon, x64 = Intel). The app is not signed by Apple yet: see the README for how to open it the first time. Installed copies update themselves."
+              --title "Kehikot $TAG" --notes "$notes"
           fi
           echo "id=$(gh release view "$TAG" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
 
@@ -70,14 +90,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read the host ref
-        id: host
-        run: echo "ref=$(tr -d '[:space:]' < host.ref)" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
         with:
           repository: Jalez/kehikko
-          ref: ${{ steps.host.outputs.ref }}
+          ref: ${{ needs.draft.outputs.host_sha }}
           path: kehikko
 
       - uses: oven-sh/setup-bun@v2
@@ -127,6 +143,24 @@ jobs:
           includeUpdaterJson: true
           args: --target ${{ matrix.target }} --config src-tauri/tauri.bundled.conf.json
 
+      # Tauri notarizes and staples the app; the disk image around it is signed
+      # but not notarized. Notarize and staple it too, and replace the uploaded
+      # one, so even a strict Gatekeeper check of the .dmg itself passes.
+      - name: Notarize and staple the disk image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          dmg="$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 2h
+          xcrun stapler staple "$dmg"
+          spctl --assess --type open --context context:primary-signature -v "$dmg"
+          gh release upload "$TAG" "$dmg" --clobber --repo "$GITHUB_REPOSITORY"
+
   # Published only when both architectures are in, so latest.json never points
   # an Intel Mac at a release that has no Intel build.
   publish:
@@ -138,3 +172,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.draft.outputs.tag }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+      # Mark the host commit this release bundled as app-<tag> in Jalez/kehikko, so
+      # its Tags page lists every app version. GITHUB_TOKEN cannot write to
+      # another repository: this needs HOST_TAG_TOKEN, a fine-grained token with
+      # Contents: read and write on Jalez/kehikko only. Without it the release
+      # still publishes and this step says what to do.
+      - name: Tag the host commit
+        env:
+          GH_TOKEN: ${{ secrets.HOST_TAG_TOKEN }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          HOST_SHA: ${{ needs.draft.outputs.host_sha }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::HOST_TAG_TOKEN is not set; tag Jalez/kehikko@$HOST_SHA as app-$TAG by hand (see README)."
+            exit 0
+          fi
+          if gh api "repos/Jalez/kehikko/git/ref/tags/app-$TAG" >/dev/null 2>&1; then
+            echo "app-$TAG already exists in Jalez/kehikko"; exit 0
+          fi
+          obj="$(gh api repos/Jalez/kehikko/git/tags -f tag="app-$TAG" -f object="$HOST_SHA" -f type=commit \
+            -f message="Host bundled in Kehikot $TAG
+          https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" --jq .sha)"
+          gh api repos/Jalez/kehikko/git/refs -f ref="refs/tags/app-$TAG" -f sha="$obj" >/dev/null
+          echo "Tagged Jalez/kehikko@$HOST_SHA as app-$TAG"
+
