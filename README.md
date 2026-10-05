@@ -41,7 +41,13 @@ nothing is left.
 git clone https://github.com/Jalez/kehikko-desktop
 cd kehikko-desktop && npm install     # the Tauri CLI, and nothing else
 npm run dev                           # or: npm run build, for a .app
+npm run install-app                   # build with the host bundled, install to /Applications
 ```
+
+`npm run build` expects a host binary in `src-tauri/binaries/` (see
+[Releases and updates](#releases-and-updates)); `install-app` builds one from
+`$KEHIKKO_HOST_DIR` or `~/Projects/kehikko` first, and installs an app without one
+— running that checkout instead — when the checkout cannot build it yet.
 
 The **npm CLI** (`@tauri-apps/cli`) rather than `cargo install tauri-cli`: it
 ships a prebuilt binary, so it is a ten-second install instead of a five-minute
@@ -51,25 +57,37 @@ Rust build takes a few minutes and compiles about 230 crates; that is expected.
 Tauri **v2**. v1 guidance will mislead you — the security model is different, and
 in particular capabilities did not exist there.
 
-### Where the host is
+### Which host it runs
 
-Not compiled in, because a shell whose host directory is a constant has to be
-rebuilt to be moved. In order:
+Two kinds, decided at launch:
 
-1. `$KEHIKKO_HOST_DIR`
-2. `~/.config/kehikko-desktop/config.json` — `{"hostDir": "…", "apiPort": 4180}`
-3. `~/Projects/kehikko`, which is a **guess**, and the error page says so when it
-   is wrong.
+- **A checkout you named** — dev mode, exactly as before: `./run.sh` in that
+  directory, API on `apiPort` (default 4180), page on API + 1. Named by, in order:
+  1. `$KEHIKKO_HOST_DIR`
+  2. `~/.config/kehikko-desktop/config.json` — `{"hostDir": "…", "apiPort": 4180}`
+- **The host the app carries** — otherwise, in any build that has one (every
+  release, and `dev/install.sh` when the checkout can build it). A single binary
+  in `Kehikot.app/Contents/MacOS/kehikko-host`, serving the page *and* `/host/*`
+  on one port: **4170**, or `$KEHIKKO_PORT`, or `{"port": …}` in the config file.
+  The window waits for `GET /host/health` before it goes there. Deliberately not
+  4180/4181, so a checkout you also run in a terminal is never adopted by
+  accident.
+- `~/Projects/kehikko` — the old **guess**, and only in a build with no bundled
+  host (`npm run dev`, `cargo run`). The error page says when it was a guess.
+
+Naming a checkout always wins: a developer's setup does not change because the
+app learned to carry a host.
 
 A path that is wrong is a shell that starts nothing and says why: the window
 opens immediately on a local waiting-room page, and that page is where the
-refusal is written — which directory it looked in, which of the three sources
-named it, and what to put in the config file. The distinction between "no such
-directory", "no `run.sh` in it" and "`run.sh` is not executable" is kept, because
-those three send you to different fixes.
+refusal is written — which directory it looked in, which source named it, and
+what to put in the config file. The distinction between "no such directory", "no
+`run.sh` in it" and "`run.sh` is not executable" is kept, because those three
+send you to different fixes.
 
-The API port is configurable; the page port is always API + 1, because `run.sh`
-computes it that way and nothing here is entitled to a different opinion.
+Either way `PATH` is widened with the usual per-user toolchain homes before the
+host starts: the bundled host needs no toolchain itself, but the modules it
+starts are still checkouts run with bun and git.
 
 ### If a host is already running
 
@@ -101,6 +119,9 @@ the shell sets all four:
 ```
 tauri://localhost http://tauri.localhost http://127.0.0.1:4181 http://localhost:4181
 ```
+
+(For the bundled host the port is its single port, 4170 by default: the page is
+served from the same origin as `/host/*`.)
 
 `tauri://localhost` is the window's origin on macOS and Linux;
 `http://tauri.localhost` is Windows'.
@@ -254,7 +275,9 @@ one-shot diagnostic and would need polling for a preference.
 It is narrow by construction. The host's page is a **remote** origin to Tauri,
 and remote content cannot reach an application command unless a capability names
 it; `capabilities/theme.json` grants this one command to window `main` at the
-host's two loopback origins, and `permissions/theme.toml` is what makes it
+host's loopback origins — `127.0.0.1`/`localhost` on 4181 (a checkout's page)
+and on 4170 (the bundled host's one port); a host moved to another port keeps
+working but does not remember its theme across launches — and `permissions/theme.toml` is what makes it
 nameable at all. A module cannot call it — initialization scripts do not reach
 subframes, so a module has no `__TAURI_INTERNALS__`, and the capability would
 refuse the origin anyway. **Note the port is hard-coded there, as it is in
@@ -395,6 +418,112 @@ launch.
 
 ---
 
+## Releases and updates
+
+The app is distributed as a macOS release on
+[GitHub Releases](https://github.com/Jalez/kehikko-desktop/releases), for Apple
+Silicon (`aarch64`) and Intel (`x64`). A release carries the host; modules still
+run from their own checkouts.
+
+### Installing (unsigned, for now)
+
+The app is not signed by Apple yet — it is only *ad-hoc* signed — so the first
+open needs one extra step:
+
+1. Download the `.dmg` for your Mac and drag **Kehikot** to Applications.
+2. **Right-click → Open** in Finder, and confirm. (Double-clicking says it
+   cannot be checked for malicious software and offers no Open button.) If macOS
+   says the app is *damaged*, it means the quarantine flag, not the file:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Kehikot.app
+   ```
+
+After that it opens normally, and updates do not ask again.
+
+### How updates work
+
+On launch a release build checks
+`https://github.com/Jalez/kehikko-desktop/releases/latest/download/latest.json`
+in the background (`src-tauri/src/update.rs`). If there is a newer version a
+native dialog offers **Install and restart** or **Later**; installing replaces
+`Kehikot.app` in place — app and bundled host together — and restarts it,
+stopping the host and its modules first. "Later" asks again next launch. A failed
+check (offline, GitHub down) is a line on stderr and nothing else: it never holds
+up the window.
+
+Every update archive is verified against the minisign public key in
+`tauri.conf.json` (`plugins.updater.pubkey`) before it is installed. That is
+independent of Apple signing and holds without it.
+
+Not checked: debug builds, and an app running a host from a named checkout —
+whoever runs one builds this app from source too.
+
+### Cutting a release
+
+1. Bump the version in **all three**: `src-tauri/tauri.conf.json`,
+   `src-tauri/Cargo.toml`, `package.json` (the release reads
+   `tauri.conf.json`; the workflow fails if the tag disagrees).
+2. To pin the host, put a kehikko tag or SHA in `host.ref` (now: `main`).
+3. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+`.github/workflows/release.yml` (also runnable by hand, *workflow_dispatch*)
+creates a draft release, builds both architectures on macOS runners — checking
+out `Jalez/kehikko` at `host.ref`, compiling the host with
+`bun run build:sidecar --target bun-darwin-{arm64,x64}` into
+`src-tauri/binaries/kehikko-host-<target-triple>` — signs the updater archives,
+uploads the `.dmg`, the `.app.tar.gz` + `.sig` and a `latest.json` covering both,
+and publishes the release once both are in.
+
+Repository secrets it needs:
+
+| Secret | Value |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | the contents of the updater private key (`~/.tauri/kehikot-updater.key` on the maintainer's machine) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password — empty for the current key, so this one may be left unset |
+
+Losing that key means installed copies can never be updated again (they only
+accept archives signed by it); keep a backup.
+
+The bundled host is wired in through `src-tauri/tauri.bundled.conf.json`
+(`bundle.externalBin`), merged with `--config`, rather than in `tauri.conf.json`:
+Tauri refuses to build at all when an `externalBin` file is missing, and that
+would make `cargo check` and `npm run dev` require a host binary. `npm run build`
+and the workflow pass it; `dev/install.sh` passes it when it could build one.
+
+### Adding Apple signing and notarization later
+
+Everything except the secrets is already in place: `bundle.macOS` has
+`entitlements: "Entitlements.plist"` (the JIT entitlements a compiled bun
+binary needs under the hardened runtime that notarization requires — the
+bundler already applies the hardened runtime and these entitlements to the
+sidecar today, measured on an ad-hoc build), and the workflow has the
+environment variables written out, commented.
+
+1. In an Apple Developer account, create a **Developer ID Application**
+   certificate; export it with its key from Keychain as a `.p12` with a password.
+2. Add repository secrets:
+
+   | Secret | Value |
+   | --- | --- |
+   | `APPLE_CERTIFICATE` | `base64 -i cert.p12` |
+   | `APPLE_CERTIFICATE_PASSWORD` | the `.p12` password |
+   | `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Jaakko Rajala (TEAMID)` |
+   | `APPLE_ID` | the Apple ID email |
+   | `APPLE_PASSWORD` | an [app-specific password](https://support.apple.com/102654) for it |
+   | `APPLE_TEAM_ID` | the 10-character team id |
+
+3. Uncomment those six lines in the `tauri-action` step's `env` in
+   `release.yml`.
+4. In `src-tauri/tauri.conf.json`, remove `"signingIdentity": "-"` from
+   `bundle.macOS` (the identity then comes from `APPLE_SIGNING_IDENTITY`; leaving
+   `-` would keep ad-hoc signing).
+5. Drop the "right-click → Open" paragraph above.
+
+Tauri imports the certificate into a temporary keychain, signs the app and the
+sidecar with it, and notarizes and staples when `APPLE_ID`/`APPLE_PASSWORD`/
+`APPLE_TEAM_ID` are present. The updater key stays as it is; existing installs
+keep updating across the switch.
+
 ## What this shell deliberately does not do
 
 It starts a process, opens a window, and stops the process. It has no folder
@@ -415,6 +544,12 @@ src-tauri/src/host.rs       where the host is, whether it is up, how to stop it
 src-tauri/src/titlebar.rs   the injection, and the argument against it
 src-tauri/src/rendering.rs  one private WebKit call, so the page keeps painting
 src-tauri/src/theme.rs      the remembered theme, and why the copy is not the truth
+src-tauri/src/update.rs     the in-place updater: check, ask, install, restart
+src-tauri/tauri.bundled.conf.json  the bundled host (externalBin), merged at build
+src-tauri/Entitlements.plist       JIT entitlements for the bundled host
+src-tauri/binaries/         the host binary, built per target (gitignored)
+host.ref                    which kehikko ref a release bundles
+.github/workflows/release.yml  the release: both arches, signed updates
 src-tauri/capabilities/     three commands, scoped to one window and one origin
 src-tauri/permissions/      what makes this app's own command nameable at all
 src-tauri/examples/         the WebKit probe that produced the table above

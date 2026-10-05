@@ -16,6 +16,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 libc = "0.2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+serde_json = "1"
 
 # Objective-C message sending, for exactly one call: the WebKit SPI in
 # `src/rendering.rs` that stops the page freezing when another app is frontmost.

@@ -1,0 +1,140 @@
+# Build Kehikot for macOS (Apple Silicon + Intel) with the host bundled, sign the
+# updater archives, and publish a GitHub Release with latest.json -- the file
+# every installed copy checks on launch.
+#
+# Cutting a release: bump the version in src-tauri/tauri.conf.json,
+# src-tauri/Cargo.toml and package.json, commit, `git tag vX.Y.Z`, push the tag.
+# See README.md, "Releases and updates".
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # One draft release up front, so both architectures upload into the same one.
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.id }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: |
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          tag="v$version"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "$tag" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match tauri.conf.json version $version"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create the draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --target "$GITHUB_SHA" \
+              --title "Kehikot $TAG" \
+              --notes "Download Kehikot_*.dmg for your Mac (aarch64 = Apple Silicon, x64 = Intel). The app is not signed by Apple yet: see the README for how to open it the first time. Installed copies update themselves."
+          fi
+          echo "id=$(gh release view "$TAG" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: draft
+    strategy:
+      fail-fast: true
+      # One at a time: each job reads, merges and re-uploads latest.json, and two
+      # at once can overwrite each other's platform entry.
+      max-parallel: 1
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bun_target: bun-darwin-arm64
+          - target: x86_64-apple-darwin
+            bun_target: bun-darwin-x64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the host ref
+        id: host
+        run: echo "ref=$(tr -d '[:space:]' < host.ref)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Jalez/kehikko
+          ref: ${{ steps.host.outputs.ref }}
+          path: kehikko
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+
+      # kehikko depends on the public protocol through git+ssh URLs; a runner
+      # has no SSH key, and the repository is public, so fetch it over https.
+      - name: Fetch GitHub dependencies over https
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Build the bundled host
+        working-directory: kehikko
+        run: |
+          bun install
+          mkdir -p "$GITHUB_WORKSPACE/src-tauri/binaries"
+          bun run build:sidecar --target ${{ matrix.bun_target }} \
+            --out "$GITHUB_WORKSPACE/src-tauri/binaries/kehikko-host-${{ matrix.target }}"
+
+      - name: Install the Tauri CLI
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Apple signing + notarization: uncomment once the secrets exist.
+          # See README.md, "Adding Apple signing and notarization".
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          releaseId: ${{ needs.draft.outputs.release_id }}
+          includeUpdaterJson: true
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.bundled.conf.json
+
+  # Published only when both architectures are in, so latest.json never points
+  # an Intel Mac at a release that has no Intel build.
+  publish:
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
