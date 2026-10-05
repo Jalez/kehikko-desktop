@@ -293,8 +293,18 @@ const MARK_DRAWN: Duration = Duration::from_millis(2400);
 
 /// Send the host's page to the window.
 ///
-/// `navigate` rather than a second window, so there is exactly one window for
+/// The same window rather than a second one, so there is exactly one window for
 /// the life of the app and no flash of a second one.
+///
+/// `location.replace` rather than `navigate`, because a navigation adds a
+/// history entry and leaves the waiting room one step behind the workbench.
+/// WebKit honours back — the mouse button, a two-finger swipe — on its own, so
+/// one press landed the window on a page whose only driver, the setup thread,
+/// had long finished: "Starting the host…" forever, over a host that was fine.
+/// Replacing the entry leaves nothing behind the workbench to go back to, and
+/// nothing in the host uses browser history, so back doing nothing loses
+/// nothing. A cross-origin `replace` from `tauri://localhost` is a top-level
+/// navigation, which the CSP does not restrict.
 fn go(handle: &tauri::AppHandle, page: &str, shown: std::time::Instant) {
     /* Not before the mark has drawn itself once. A host that is already
        running answers at once, and leaving at once cut the cube off mid-line
@@ -303,8 +313,10 @@ fn go(handle: &tauri::AppHandle, page: &str, shown: std::time::Instant) {
         std::thread::sleep(left);
     }
     if let Some(window) = handle.get_webview_window("main") {
-        if let Ok(url) = page.parse() {
-            let _ = window.navigate(url);
+        /* Parsed only to refuse what is not a URL before it reaches a script;
+           the string itself goes in as a JSON literal. */
+        if page.parse::<tauri::Url>().is_ok() {
+            let _ = window.eval(&format!("location.replace({})", quote(page)));
         }
     }
 
