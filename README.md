@@ -560,8 +560,28 @@ sidecar today, measured on an ad-hoc build), and the workflow has the
 environment variables written out, commented.
 
 1. In an Apple Developer account, create a **Developer ID Application**
-   certificate; export it with its key from Keychain as a `.p12` with a password.
-2. Add repository secrets:
+   certificate: a certificate request from Keychain Access (on recent macOS it is
+   at `/System/Library/CoreServices/Applications/Keychain Access.app` and
+   Spotlight doesn't find it) → **Certificate Assistant → Request a Certificate
+   From a Certificate Authority… → Saved to disk**, uploaded at
+   developer.apple.com. Double-click the downloaded `.cer`. If it shows as not
+   trusted, add Apple's intermediate:
+   `curl -fsSLO https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer && security add-certificates -k ~/Library/Keychains/login.keychain-db DeveloperIDG2CA.cer`.
+2. Export it and keep the passwords in the login keychain, then send everything
+   to GitHub:
+
+   ```sh
+   swift dev/signing.swift export             # .p12 on the Desktop, generated password in the keychain
+   swift dev/signing.swift save-app-password  # app-specific password, asked in a hidden dialog
+   dev/set-signing-secrets.sh you@example.com # the six secrets below, piped from the keychain
+   ```
+
+   Keychain Access often won't offer `.p12` for the identity, and
+   `security export -t identities` aborts on any non-exportable key elsewhere in
+   the keychain; `signing.swift` exports the one identity by itself. The
+   certificate lasts five years; renewing is these same steps.
+
+   The secrets it sets:
 
    | Secret | Value |
    | --- | --- |
