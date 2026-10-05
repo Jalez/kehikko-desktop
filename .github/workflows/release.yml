@@ -65,9 +65,14 @@ jobs:
           HOST_SHA: ${{ steps.host.outputs.sha }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            notes="Download Kehikot_*.dmg for your Mac (aarch64 = Apple Silicon, x64 = Intel), open it and drag Kehikot to Applications. Signed with Developer ID and notarized by Apple. Installed copies update themselves.
+            # What a person reads on the release page: which file, and that it
+            # updates itself. "What's new" is written by hand after publishing.
+            version="${TAG#v}"
+            notes="**Download** \`Kehikot_${version}_aarch64.dmg\` for Macs with Apple silicon (M1 and later), or \`Kehikot_${version}_x64.dmg\` for Intel Macs. Open it and drag Kehikot to Applications.
 
-          Host: [Jalez/kehikko@${HOST_SHA:0:7}](https://github.com/Jalez/kehikko/commit/$HOST_SHA), tagged \`app-$TAG\` there."
+          Already have Kehikot? It updates itself: look for **Restart to update** in the header.
+
+          <sub>Built from [Jalez/kehikko@${HOST_SHA:0:7}](https://github.com/Jalez/kehikko/commit/$HOST_SHA).</sub>"
             gh release create "$TAG" --draft --target "$GITHUB_SHA" \
               --title "Kehikot $TAG" --notes "$notes"
           fi
