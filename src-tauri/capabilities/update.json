@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "update",
+  "description": "The app updater, for the host's Updates menu: what it is doing (update_status), check now (check_for_update), and restart into a downloaded update (apply_update). Three commands with no arguments, granted to the host's own origin and to no other, and to the one window this app has. A host on a configured port gets the same grant at runtime (`grant_update_commands_to` in lib.rs).",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:4170",
+      "http://localhost:4170",
+      "http://127.0.0.1:4181",
+      "http://localhost:4181"
+    ]
+  },
+  "permissions": [
+    "allow-update"
+  ]
+}
