@@ -26,7 +26,7 @@
 //! matching and the lights land back on top of the project control. The
 //! injection is written to make that failure *loud* rather than silent (it
 //! appends to the window title, which the shell then reads and prints), but
-//! loud is not the same as fixed. See the README for the host-side change this
+//! loud is not the same as fixed. See docs/README.md for the host-side change this
 //! should be replaced by.
 //!
 //! ## The two numbers

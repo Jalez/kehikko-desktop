@@ -101,7 +101,7 @@
 //! `downloading` with `progress: null`, then 0..1, `ready`; `apply_update` then
 //! relaunches without installing anything. `=fail` fails the first download at
 //! 60%, so `failed` and a retry through `check_for_update` can be seen;
-//! `=dialog` shows the native alert at `ready` regardless. The README has the
+//! `=dialog` shows the native alert at `ready` regardless. docs/README.md has the
 //! recipe for a real end-to-end test against a locally served `latest.json`.
 
 use std::sync::Mutex;
