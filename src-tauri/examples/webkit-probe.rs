@@ -1,4 +1,4 @@
-//! The instrument that produced the WebKit table in the README.
+//! The instrument that produced the WebKit table in docs/README.md.
 //!
 //! This is not part of the shell. It is a second, throwaway window that visits
 //! the host page and each module's own page in WKWebView, runs a script in

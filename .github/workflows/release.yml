@@ -4,7 +4,7 @@
 #
 # Cutting a release: bump the version in src-tauri/tauri.conf.json,
 # src-tauri/Cargo.toml and package.json, commit, `git tag vX.Y.Z`, push the tag.
-# See README.md, "Releases and updates".
+# See docs/README.md, "Releases and updates".
 name: release
 
 on:
@@ -135,7 +135,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple signing + notarization (Developer ID). See README.md,
+          # Apple signing + notarization (Developer ID). See docs/README.md,
           # "Apple signing and notarization", for how these secrets are made.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -190,7 +190,7 @@ jobs:
           HOST_SHA: ${{ needs.draft.outputs.host_sha }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::HOST_TAG_TOKEN is not set; tag Jalez/kehikko@$HOST_SHA as app-$TAG by hand (see README)."
+            echo "::notice::HOST_TAG_TOKEN is not set; tag Jalez/kehikko@$HOST_SHA as app-$TAG by hand (see the comment above this step)."
             exit 0
           fi
           if gh api "repos/Jalez/kehikko/git/ref/tags/app-$TAG" >/dev/null 2>&1; then
