@@ -17,10 +17,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-/// The API port. The page is always this plus one — `run.sh` computes it that
-/// way (`--port "$((PORT + 1))"`) and nothing here is entitled to a different
-/// opinion about it.
+/// The API port of a host run from a checkout. The page is always this plus
+/// one — `run.sh` computes it that way (`--port "$((PORT + 1))"`) and nothing
+/// here is entitled to a different opinion about it.
 pub const DEFAULT_API_PORT: u16 = 4180;
+
+/// The one port of the bundled host. It serves the page AND `/host/*` there, so
+/// there is no "plus one". Deliberately not 4180/4181: a person who also runs a
+/// host from a checkout keeps it, and the app does not adopt it by accident.
+pub const BUNDLED_PORT: u16 = 4170;
+
+/// The sidecar's file name inside `Kehikot.app/Contents/MacOS/`. Tauri's
+/// `bundle.externalBin` takes `binaries/kehikko-host-<target-triple>` at build
+/// time and drops the triple when it copies the file into the bundle.
+pub const SIDECAR: &str = "kehikko-host";
 
 /// The name of the environment variable every module reads to decide who may
 /// frame it. See `origin_value()` for what we put in it and why it is a list.
@@ -35,46 +45,105 @@ pub struct Settings {
     pub source: String,
 }
 
-/// Read where the host lives. In order:
+/// Which host this window runs.
+pub enum Plan {
+    /// A kehikko checkout, started with its `run.sh`: API on `api_port`, page on
+    /// `api_port + 1`. What a developer runs, and what this app always did.
+    Checkout(Settings),
+    /// The host compiled into a single binary and shipped inside the app. One
+    /// port for the page and the API. What a person who downloaded a release
+    /// runs.
+    Bundled { binary: PathBuf, port: u16 },
+}
+
+impl Plan {
+    /// The port the window's page is served on.
+    pub fn page_port(&self) -> u16 {
+        match self {
+            Plan::Checkout(s) => s.api_port + 1,
+            Plan::Bundled { port, .. } => *port,
+        }
+    }
+}
+
+/// Decide which host to run. In order:
+///
+///  1. A checkout somebody NAMED — `$KEHIKKO_HOST_DIR`, or `hostDir` in the
+///     config file. Naming one is the only way to get dev mode, so a developer's
+///     setup keeps working exactly as before, bundled host or not.
+///  2. The bundled host, when this app carries one (a release build does).
+///  3. `~/Projects/kehikko`, the old default guess — only reachable in a build
+///     without a sidecar (`tauri dev`, `cargo run`), where it is what it always was.
+pub fn plan() -> Plan {
+    if let Some(settings) = named_checkout() {
+        return Plan::Checkout(settings);
+    }
+    if let Some(binary) = sidecar() {
+        return Plan::Bundled {
+            binary,
+            port: bundled_port(),
+        };
+    }
+    Plan::Checkout(Settings {
+        dir: home().join("Projects").join("kehikko"),
+        api_port: port_from_env().unwrap_or(DEFAULT_API_PORT),
+        source: "the default guess (~/Projects/kehikko)".into(),
+    })
+}
+
+/// A checkout somebody named:
 ///
 ///  1. `$KEHIKKO_HOST_DIR` — for a second checkout, or a one-off.
 ///  2. `~/.config/kehikko-desktop/config.json`, `{"hostDir": "…", "apiPort": 4180}`.
-///  3. `~/Projects/kehikko`, the default, which is right for exactly one person
-///     and is a *guess* rather than an answer — so when the guess is wrong the
-///     error page says it was a guess.
 ///
 /// Deliberately not compiled in: a shell whose host directory is a constant is
-/// a shell that has to be rebuilt to be moved, and this one is meant to be
-/// handed to somebody whose checkout is somewhere else.
-pub fn settings() -> Settings {
+/// a shell that has to be rebuilt to be moved.
+fn named_checkout() -> Option<Settings> {
     if let Ok(dir) = std::env::var("KEHIKKO_HOST_DIR") {
         if !dir.trim().is_empty() {
-            return Settings {
+            return Some(Settings {
                 dir: PathBuf::from(dir),
                 api_port: port_from_env().unwrap_or(DEFAULT_API_PORT),
                 source: "$KEHIKKO_HOST_DIR".into(),
-            };
+            });
         }
     }
 
     let config = config_path();
-    if let Ok(text) = std::fs::read_to_string(&config) {
-        if let Some(dir) = json_string(&text, "hostDir") {
-            return Settings {
-                dir: PathBuf::from(expand_tilde(&dir)),
-                api_port: json_number(&text, "apiPort")
-                    .or_else(port_from_env)
-                    .unwrap_or(DEFAULT_API_PORT),
-                source: config.display().to_string(),
-            };
-        }
+    let text = std::fs::read_to_string(&config).ok()?;
+    let dir = json_string(&text, "hostDir")?;
+    if dir.trim().is_empty() {
+        return None;
     }
+    Some(Settings {
+        dir: PathBuf::from(expand_tilde(&dir)),
+        api_port: json_number(&text, "apiPort")
+            .or_else(port_from_env)
+            .unwrap_or(DEFAULT_API_PORT),
+        source: config.display().to_string(),
+    })
+}
 
-    Settings {
-        dir: home().join("Projects").join("kehikko"),
-        api_port: port_from_env().unwrap_or(DEFAULT_API_PORT),
-        source: "the default guess (~/Projects/kehikko)".into(),
+/// The bundled host, if this build carries one: next to our own executable.
+fn sidecar() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe.parent()?.join(SIDECAR);
+    candidate.is_file().then_some(candidate)
+}
+
+/// The bundled host's port: `$KEHIKKO_PORT`, then `"port"` in the config file,
+/// then 4170.
+fn bundled_port() -> u16 {
+    if let Some(p) = std::env::var("KEHIKKO_PORT")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+    {
+        return p;
     }
+    std::fs::read_to_string(config_path())
+        .ok()
+        .and_then(|text| json_number(&text, "port"))
+        .unwrap_or(BUNDLED_PORT)
 }
 
 /// The variable that tells a host we started where to ask for a restart.
@@ -264,6 +333,60 @@ pub fn start(dir: &Path, script: &Path, api_port: u16) -> std::io::Result<Child>
     }
 
     cmd.spawn()
+}
+
+/// Start the bundled host, in its own process group for the same reason as
+/// `start` — it starts modules, and they must go when it goes.
+///
+/// It runs from the home directory: it has no checkout to stand in, and keeps
+/// nothing relative to its working directory (project data lives under each
+/// project's `.kehikot/`). `PATH` is still augmented: the host itself needs no
+/// toolchain, but the modules it starts are checkouts run with bun and git.
+pub fn start_sidecar(binary: &Path, port: u16) -> std::io::Result<Child> {
+    let mut cmd = Command::new(binary);
+    cmd.current_dir(home())
+        .env("PORT", port.to_string())
+        .env("PATH", launch_path())
+        .env(ORIGIN_VAR, origin_value(port))
+        .env(RESTART_VAR, restart_file())
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    cmd.spawn()
+}
+
+/// Does `GET /host/health` answer 200 on that port?
+///
+/// The bundled host's readiness signal. Listening is not enough for it: the
+/// port opens before the host has finished starting, and a page loaded then is
+/// a page that has to be reloaded. Twelve lines of HTTP/1.0 rather than an
+/// HTTP client, for one status line.
+pub fn healthy(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(300)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let request = format!(
+        "GET /host/health HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut head = [0u8; 32];
+    let n = stream.read(&mut head).unwrap_or(0);
+    let line = String::from_utf8_lossy(&head[..n]);
+    let mut words = line.split_whitespace();
+    words.next().is_some_and(|v| v.starts_with("HTTP/")) && words.next() == Some("200")
 }
 
 /// A `PATH` that can actually find `bun`.

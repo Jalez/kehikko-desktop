@@ -24,6 +24,7 @@ mod host;
 mod rendering;
 mod theme;
 mod titlebar;
+mod update;
 
 /// Keep the page painting while another app is frontmost, exposed so the probe
 /// example can build a window that behaves exactly like the shell's — which is
@@ -79,10 +80,21 @@ static GROUP: AtomicI32 = AtomicI32::new(0);
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![remember_theme])
         .setup(|app| {
-            let settings = host::settings();
-            let page_port = settings.api_port + 1;
+            let plan = host::plan();
+            let page_port = plan.page_port();
+
+            // A release build running the host it carries checks for a newer
+            // release in the background. Not a debug build, and not a window on
+            // a checkout: whoever runs the host from a checkout builds this app
+            // from source too, and an offer to replace it with a release would be
+            // an offer to undo their own build. See `update.rs`.
+            if !cfg!(debug_assertions) && matches!(plan, host::Plan::Bundled { .. }) {
+                update::check_in_background(app.handle().clone());
+            }
 
             // Read before the window is built, because it decides the very
             // first frame. See `theme.rs`: this is an echo of the host's
@@ -158,7 +170,7 @@ pub fn run() {
                mark to finish drawing — see `go`. */
             let shown = std::time::Instant::now();
             std::thread::spawn(move || {
-                let page = format!("http://127.0.0.1:{page_port}");
+                let page = format!("http://127.0.0.1:{page_port}/");
 
                 // Somebody is already serving that port. Adopt it: do not start
                 // a second host, and — the half that matters — do not stop it
@@ -173,103 +185,9 @@ pub fn run() {
                     return;
                 }
 
-                let script = match host::startable(&settings.dir) {
-                    Ok(script) => script,
-                    Err(refusal) => {
-                        say(&handle, &format!(
-                            "{}\n\nThat path came from {}.\n\nSet the right one in {} as {{\"hostDir\": \"/path/to/kehikko\"}}, or run this with KEHIKKO_HOST_DIR set, and reopen the window.",
-                            refusal.sentence(),
-                            settings.source,
-                            host::config_path().display()
-                        ), Phase::Failed);
-                        return;
-                    }
-                };
-
-                // Before spawning: is the toolchain even reachable? An app
-                // launched from Finder has none of the shell profile that puts
-                // `~/.bun/bin` on the path, and `run.sh` ends in `exec bunx`.
-                // Without this the window waits two minutes for a port that was
-                // never going to open. See `host::launch_path`.
-                if host::finds_bun().is_none() {
-                    say(&handle, &format!(
-                        "No `bun` could be found. An app launched from Finder does not inherit your shell, so \
-                         `~/.bun/bin` is not on its path — and {} ends in `exec bunx vite`. \
-                         Install bun where the shell looks (~/.bun/bin, /opt/homebrew/bin, /usr/local/bin), or \
-                         launch Kehikot from a terminal, where your own path applies.",
-                        script.display()
-                    ), Phase::Failed);
-                    return;
-                }
-
-                say(&handle, &format!("Starting the host in {}…", settings.dir.display()), Phase::Starting);
-
-                /* A request left over from a restart that never happened (the
-                   app was killed between the write and the watch) must not
-                   restart this fresh start the moment it is up. */
-                let _ = std::fs::remove_file(host::restart_file());
-
-                let child = match host::start(&settings.dir, &script, settings.api_port) {
-                    Ok(child) => child,
-                    Err(e) => {
-                        say(&handle, &format!("Could not run {}: {e}", script.display()), Phase::Failed);
-                        return;
-                    }
-                };
-
-                // The child led its own process group, so its pid IS the group
-                // id. See `host::start` for why the group and not the pid.
-                let pgid = child.id() as i32;
-                GROUP.store(pgid, Ordering::SeqCst);
-                arm_terminal_signals();
-
-                // Waiting on the port alone is waiting for something that may
-                // already have given up: `run.sh` can exit in under a second
-                // (a missing binary, a held port) and waiting only on the port
-                // then sat for two minutes before saying anything. Watch the
-                // child as well, and let whichever happens first decide.
-                //
-                // The two minutes stay, for the case they were chosen for: a
-                // first run installs dependencies, and a budget that gave up at
-                // five seconds would report a broken host to everybody who had
-                // just cloned one. A budget is for a host that is slow. A child
-                // that has exited is not slow, and no longer waits one out.
-                let mut child = child;
-                let mut exited: Option<std::process::ExitStatus> = None;
-                let deadline = std::time::Instant::now() + Duration::from_secs(120);
-                let mut up = false;
-                while std::time::Instant::now() < deadline {
-                    if host::listening(page_port) {
-                        up = true;
-                        break;
-                    }
-                    match child.try_wait() {
-                        Ok(Some(status)) => {
-                            exited = Some(status);
-                            break;
-                        }
-                        Ok(None) => {}
-                        Err(_) => break,
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-
-                if up {
-                    go(&handle, &page, shown);
-                    watch_for_restart(handle.clone());
-                } else if let Some(status) = exited {
-                    say(&handle, &format!(
-                        "{} stopped on its own ({status}) without anything answering on {page}. \
-                         Run it in a terminal from {} to see what it printed — the reason is there and it is \
-                         usually a missing tool, a port already held, or a failed `bun install`.",
-                        script.display(),
-                        settings.dir.display()
-                    ), Phase::Failed);
-                } else {
-                    say(&handle, &format!(
-                        "The host was started in {} but nothing answered on {page} within two minutes. Look at the terminal this was launched from: run.sh prints why it failed there, and it is usually a port already held or a failed `bun install`.",
-                        settings.dir.display()
-                    ), Phase::Failed);
+                match plan {
+                    host::Plan::Checkout(settings) => run_checkout(&handle, &settings, &page, shown),
+                    host::Plan::Bundled { binary, port } => run_bundled(&handle, &binary, port, &page, shown),
                 }
             });
 
@@ -284,6 +202,150 @@ pub fn run() {
             RunEvent::ExitRequested { .. } | RunEvent::Exit => reap(),
             _ => {}
         });
+}
+
+/// Start a host from a checkout's `run.sh` and wait for its page port. What
+/// this app always did, and what it still does whenever a checkout is named.
+fn run_checkout(handle: &tauri::AppHandle, settings: &host::Settings, page: &str, shown: std::time::Instant) {
+    let page_port = settings.api_port + 1;
+    let script = match host::startable(&settings.dir) {
+        Ok(script) => script,
+        Err(refusal) => {
+            say(handle, &format!(
+                "{}\n\nThat path came from {}.\n\nSet the right one in {} as {{\"hostDir\": \"/path/to/kehikko\"}}, or run this with KEHIKKO_HOST_DIR set, and reopen the window.",
+                refusal.sentence(),
+                settings.source,
+                host::config_path().display()
+            ), Phase::Failed);
+            return;
+        }
+    };
+
+    // Before spawning: is the toolchain even reachable? An app launched from
+    // Finder has none of the shell profile that puts `~/.bun/bin` on the path,
+    // and `run.sh` ends in `exec bunx`. Without this the window waits two
+    // minutes for a port that was never going to open. See `host::launch_path`.
+    if host::finds_bun().is_none() {
+        say(handle, &format!(
+            "No `bun` could be found. An app launched from Finder does not inherit your shell, so \
+             `~/.bun/bin` is not on its path — and {} ends in `exec bunx vite`. \
+             Install bun where the shell looks (~/.bun/bin, /opt/homebrew/bin, /usr/local/bin), or \
+             launch Kehikot from a terminal, where your own path applies.",
+            script.display()
+        ), Phase::Failed);
+        return;
+    }
+
+    say(handle, &format!("Starting the host in {}…", settings.dir.display()), Phase::Starting);
+    forget_stale_restart();
+
+    let child = match host::start(&settings.dir, &script, settings.api_port) {
+        Ok(child) => child,
+        Err(e) => {
+            say(handle, &format!("Could not run {}: {e}", script.display()), Phase::Failed);
+            return;
+        }
+    };
+
+    // The two minutes are for the case they were chosen for: a first run
+    // installs dependencies, and a budget that gave up at five seconds would
+    // report a broken host to everybody who had just cloned one.
+    match wait_until_up(child, Duration::from_secs(120), || host::listening(page_port)) {
+        Up::Yes => {
+            go(handle, page, shown);
+            watch_for_restart(handle.clone());
+        }
+        Up::Exited(status) => say(handle, &format!(
+            "{} stopped on its own ({status}) without anything answering on {page}. \
+             Run it in a terminal from {} to see what it printed — the reason is there and it is \
+             usually a missing tool, a port already held, or a failed `bun install`.",
+            script.display(),
+            settings.dir.display()
+        ), Phase::Failed),
+        Up::TimedOut => say(handle, &format!(
+            "The host was started in {} but nothing answered on {page} within two minutes. Look at the terminal this was launched from: run.sh prints why it failed there, and it is usually a port already held or a failed `bun install`.",
+            settings.dir.display()
+        ), Phase::Failed),
+    }
+}
+
+/// Start the host this app carries and wait for `/host/health`.
+///
+/// One port for the page and `/host/*`, no toolchain needed for the host itself
+/// (the modules it starts still need bun and git — `PATH` is augmented for them
+/// in `host::start_sidecar`), and nothing to install first, so a minute is a
+/// generous budget rather than a tight one.
+fn run_bundled(handle: &tauri::AppHandle, binary: &std::path::Path, port: u16, page: &str, shown: std::time::Instant) {
+    say(handle, "Starting the host…", Phase::Starting);
+    forget_stale_restart();
+
+    let child = match host::start_sidecar(binary, port) {
+        Ok(child) => child,
+        Err(e) => {
+            say(handle, &format!("Could not run the bundled host at {}: {e}", binary.display()), Phase::Failed);
+            return;
+        }
+    };
+
+    match wait_until_up(child, Duration::from_secs(60), || host::healthy(port)) {
+        Up::Yes => {
+            go(handle, page, shown);
+            watch_for_restart(handle.clone());
+        }
+        Up::Exited(status) => say(handle, &format!(
+            "The bundled host stopped on its own ({status}) before answering on {page}. \
+             The usual reason is port {port} already held by something that is not a Kehikot host — \
+             set another one as {{\"port\": 4171}} in {}, or with KEHIKKO_PORT, and reopen the window.",
+            host::config_path().display()
+        ), Phase::Failed),
+        Up::TimedOut => say(handle, &format!(
+            "The bundled host was started but {page}host/health did not answer within a minute. \
+             Quit and reopen the window; if it happens again, run {} from a terminal to see what it prints.",
+            binary.display()
+        ), Phase::Failed),
+    }
+}
+
+/// A request left over from a restart that never happened (the app was killed
+/// between the write and the watch) must not restart this fresh start the
+/// moment it is up.
+fn forget_stale_restart() {
+    let _ = std::fs::remove_file(host::restart_file());
+}
+
+enum Up {
+    Yes,
+    Exited(std::process::ExitStatus),
+    TimedOut,
+}
+
+/// Record the child as ours, then wait for `ready` — or for the child to exit,
+/// whichever comes first.
+///
+/// Waiting on readiness alone is waiting for something that may already have
+/// given up: a host can exit in under a second (a missing binary, a held port)
+/// and waiting only on the port then sat for the whole budget before saying
+/// anything. A budget is for a host that is slow. A child that has exited is not
+/// slow, and no longer waits one out.
+fn wait_until_up(mut child: std::process::Child, budget: Duration, ready: impl Fn() -> bool) -> Up {
+    // The child led its own process group, so its pid IS the group id. See
+    // `host::start` for why the group and not the pid.
+    GROUP.store(child.id() as i32, Ordering::SeqCst);
+    arm_terminal_signals();
+
+    let deadline = std::time::Instant::now() + budget;
+    while std::time::Instant::now() < deadline {
+        if ready() {
+            return Up::Yes;
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return Up::Exited(status),
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Up::TimedOut
 }
 
 /// How long the waiting room's mark takes to draw itself once: the last strut
@@ -419,7 +481,7 @@ fn watch_for_restart(handle: tauri::AppHandle) {
     });
 }
 
-fn reap() {
+pub(crate) fn reap() {
     let pgid = GROUP.swap(0, Ordering::SeqCst);
     if pgid == 0 {
         return;
@@ -499,7 +561,7 @@ extern "C" fn handle_terminal_signal(sig: libc::c_int) {
 /// remote content cannot reach an application command unless a capability names
 /// it — measured in `tauri`'s `webview/mod.rs`, which rejects the call outright
 /// otherwise. `capabilities/theme.json` grants exactly this one command to
-/// window `main` at the host's two loopback origins, and `permissions/theme.toml`
+/// window `main` at the host's loopback origins (4181, and the bundled 4170), and `permissions/theme.toml`
 /// is what makes the command nameable at all. A module cannot call it: an
 /// initialization script never reaches a subframe, so a module has no
 /// `__TAURI_INTERNALS__` to call through, and the capability would refuse the

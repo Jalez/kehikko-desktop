@@ -5,7 +5,7 @@
   "description": "A window on the Kehikot workbench, and the thing that owns the host's lifetime.",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build",
+    "build": "tauri build --config src-tauri/tauri.bundled.conf.json",
     "tauri": "tauri",
     "install-app": "bash dev/install.sh"
   },

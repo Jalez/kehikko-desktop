@@ -2,3 +2,7 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/
 .DS_Store
+
+# The bundled host, built from a kehikko checkout (see dev/install.sh and
+# .github/workflows/release.yml). Never committed.
+src-tauri/binaries/
