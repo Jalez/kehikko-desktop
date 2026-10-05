@@ -438,20 +438,15 @@ The app is distributed as a macOS release on
 Silicon (`aarch64`) and Intel (`x64`). A release carries the host; modules still
 run from their own checkouts.
 
-### Installing (unsigned, for now)
+### Installing
 
-The app is not signed by Apple yet — it is only *ad-hoc* signed — so the first
-open needs one extra step:
+Download the `.dmg` for your Mac, drag **Kehikot** to Applications and open it.
+Releases are signed with a Developer ID certificate and notarized by Apple, so
+macOS opens them without a warning, and updates install in place.
 
-1. Download the `.dmg` for your Mac and drag **Kehikot** to Applications.
-2. **Right-click → Open** in Finder, and confirm. (Double-clicking says it
-   cannot be checked for malicious software and offers no Open button.) If macOS
-   says the app is *damaged*, it means the quarantine flag, not the file:
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/Kehikot.app
-   ```
-
-After that it opens normally, and updates do not ask again.
+Releases up to 0.1.3 were only ad-hoc signed. If one of those will not open,
+approve it once in **System Settings → Privacy & Security → Open Anyway**, or
+clear the quarantine flag with `xattr -dr com.apple.quarantine /Applications/Kehikot.app`.
 
 ### How updates work
 
@@ -550,7 +545,7 @@ Tauri refuses to build at all when an `externalBin` file is missing, and that
 would make `cargo check` and `npm run dev` require a host binary. `npm run build`
 and the workflow pass it; `dev/install.sh` passes it when it could build one.
 
-### Adding Apple signing and notarization later
+### Apple signing and notarization
 
 Everything except the secrets is already in place: `bundle.macOS` has
 `entitlements: "Entitlements.plist"` (the JIT entitlements a compiled bun
@@ -597,7 +592,6 @@ environment variables written out, commented.
 4. In `src-tauri/tauri.conf.json`, remove `"signingIdentity": "-"` from
    `bundle.macOS` (the identity then comes from `APPLE_SIGNING_IDENTITY`; leaving
    `-` would keep ad-hoc signing).
-5. Drop the "right-click → Open" paragraph above.
 
 Tauri imports the certificate into a temporary keychain, signs the app and the
 sidecar with it, and notarizes and staples when `APPLE_ID`/`APPLE_PASSWORD`/

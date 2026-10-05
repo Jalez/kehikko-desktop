@@ -29,7 +29,9 @@ sidecar="$here/src-tauri/binaries/kehikko-host-$triple"
 
 # Updater artifacts are signed for releases (CI holds the key); a local install
 # has no use for them, and asking for them without the key fails the build.
-build_args=(--bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}')
+# Local builds stay ad-hoc signed: the Developer ID certificate signs releases in
+# CI, and a local build should not need it (or prompt for the keychain).
+build_args=(--bundles app --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}')
 
 if [ -n "$bun_target" ] && [ -f "$host_src/package.json" ] &&
   grep -q '"build:sidecar"' "$host_src/package.json"; then
