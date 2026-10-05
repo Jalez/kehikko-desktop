@@ -15,10 +15,14 @@
 //! initialization scripts were measured not to reach subframes, so a module
 //! cannot see the bridge even if it looks for one.
 //!
-//! The host's own page touches it, in one direction, for one word. This program
-//! carried no `invoke_handler` at all until the theme needed to survive a quit
-//! — see `remember_theme` at the bottom of this file for what was weighed. Talk
-//! yourself out of the second command before you add it.
+//! The host's own page reaches it in two places, and only those. This
+//! program carried no `invoke_handler` at all until the theme needed to survive
+//! a quit — see `remember_theme` at the bottom of this file for what was
+//! weighed. The second is the app updater (`update_status`, `check_for_update`
+//! and `apply_update`, in `update.rs`): the host's Updates menu is the one
+//! place a person sees updates, so it has to be able to ask what the app is
+//! doing and to press "restart", and nothing but this program can install an
+//! app update. Talk yourself out of the next one before you add it.
 
 mod host;
 mod rendering;
@@ -81,20 +85,27 @@ static GROUP: AtomicI32 = AtomicI32::new(0);
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![remember_theme])
+        .invoke_handler(tauri::generate_handler![
+            remember_theme,
+            update::update_status,
+            update::check_for_update,
+            update::apply_update
+        ])
         .setup(|app| {
             let plan = host::plan();
             let page_port = plan.page_port();
 
             // A release build running the host it carries checks for a newer
-            // release in the background. Not a debug build, and not a window on
-            // a checkout: whoever runs the host from a checkout builds this app
-            // from source too, and an offer to replace it with a release would be
-            // an offer to undo their own build. See `update.rs`.
-            if !cfg!(debug_assertions) && matches!(plan, host::Plan::Bundled { .. }) {
-                update::check_in_background(app.handle().clone());
+            // release in the background and downloads it; the host's page shows
+            // it (the contract is in `update.rs`). Not a debug build, and not a window on a checkout: whoever
+            // runs the host from a checkout builds this app from source too, and
+            // an offer to replace it with a release would be an offer to undo
+            // their own build. See `update.rs`.
+            let updates = update::mode(matches!(plan, host::Plan::Bundled { .. }));
+            if updates != update::Mode::Off {
+                grant_update_commands_to(app, page_port);
             }
+            update::start(app.handle(), updates);
 
             // Read before the window is built, because it decides the very
             // first frame. See `theme.rs`: this is an echo of the host's
@@ -141,10 +152,21 @@ pub fn run() {
                 // the inset comes back as an 82-pixel hole where the traffic
                 // lights are not. Measured: the second page load in fullscreen
                 // reported the inset back at 82px before this hook existed.
-                .on_page_load(|webview, _| {
+                .on_page_load(|webview, payload| {
                     let on = webview.is_fullscreen().unwrap_or(false);
                     let _ = webview.eval(&titlebar::fullscreen_script(on));
+                    // The update's state lives on this side; a page that has
+                    // just loaded is told where it is.
+                    if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                        update::replay(&webview);
+                    }
                 });
+
+            // Debug builds with KEHIKOT_UPDATE_DEMO only: a test panel that
+            // plays the host's half of the update contract. Not shipped.
+            if let Some(harness) = update::demo_harness(updates) {
+                builder = builder.initialization_script(harness);
+            }
 
             // The window has no title bar of its own: the page runs to the top
             // of the window and the three lights float over the host's strip.
@@ -195,11 +217,18 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error building the Kehikot shell")
-        .run(|_app, event| match event {
+        .run(|app, event| match event {
             // Both, and in this order. `ExitRequested` is where a graceful quit
             // arrives with time to spare; `Exit` catches the paths that skip it.
             // `reap()` is written to be harmless the second time.
-            RunEvent::ExitRequested { .. } | RunEvent::Exit => reap(),
+            //
+            // Then a downloaded update nobody restarted for is installed, so
+            // the next launch is the new version — after the reap, because the
+            // host being stopped lives inside the bundle being replaced.
+            RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                reap();
+                update::install_pending(app);
+            }
             _ => {}
         });
 }
@@ -476,6 +505,9 @@ fn watch_for_restart(handle: tauri::AppHandle) {
         if file.exists() {
             let _ = std::fs::remove_file(&file);
             reap();
+            // A downloaded app update rides along, rather than being thrown
+            // away by a restart that does not pass through the exit events.
+            update::install_pending(&handle);
             handle.restart();
         }
     });
@@ -529,7 +561,7 @@ extern "C" fn handle_terminal_signal(sig: libc::c_int) {
 
 /// The host's page telling this shell what theme it is showing.
 ///
-/// ## This is the only command, and it is new ground
+/// ## This was the first command, and it was new ground
 ///
 /// Until this existed there was no `invoke_handler` in this program at all, and
 /// `say()` above is a small essay on why: the shell says three sentences to the
@@ -553,7 +585,8 @@ extern "C" fn handle_terminal_signal(sig: libc::c_int) {
 ///   is a worse mechanism than the one Tauri ships, not a smaller one.
 ///
 /// So: one command, one word, one direction, no reply. Adding a second is a
-/// decision to make on its own merits and not a precedent this one sets.
+/// decision to make on its own merits and not a precedent this one sets. (The
+/// second, the app updater's, was made on its own: see `update.rs`.)
 ///
 /// ## What keeps it narrow
 ///
@@ -583,5 +616,29 @@ fn remember_theme(app: tauri::AppHandle, theme: String) {
     // running window in the state the next cold start will open in.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_background_color(Some(seen.color()));
+    }
+}
+
+/// Grant the updater's three commands to the port the host is actually on,
+/// when that is not one `capabilities/update.json` already names.
+///
+/// The static capability names 4170 (the bundled host) and 4181 (a checkout),
+/// as `theme.json` does. But the bundled host's port is configurable
+/// (`$KEHIKKO_PORT`, `{"port": …}`), and an Updates menu on 4171 whose
+/// "restart" is refused is worse than none. So the one origin this window
+/// will show the host on is added at runtime — the same three commands, the same
+/// window, one more loopback origin, decided by this program and not by the
+/// page.
+fn grant_update_commands_to(app: &tauri::App, port: u16) {
+    if port == 4170 || port == 4181 {
+        return;
+    }
+    let capability = tauri::ipc::CapabilityBuilder::new("update-configured-port")
+        .window("main")
+        .remote(format!("http://127.0.0.1:{port}"))
+        .remote(format!("http://localhost:{port}"))
+        .permission("allow-update");
+    if let Err(e) = app.add_capability(capability) {
+        eprintln!("kehikko-desktop: could not grant the update commands to port {port}: {e}");
     }
 }

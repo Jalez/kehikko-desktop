@@ -1,0 +1,14 @@
+#  The app updater's three commands, made nameable. See `theme.toml` for why an
+#  application command needs a permission file before any page can reach it.
+#
+#  None takes an argument, and each acts only within what the shell's own state
+#  allows: `apply_update` does nothing unless a downloaded, verified update is
+#  ready; `check_for_update` does nothing while a check, download or install is
+#  already running; `update_status` only reads. So the most a confused or
+#  hostile caller on the host's origin achieves is pressing the button the
+#  person was already being shown, or asking GitHub a question early.
+
+[[permission]]
+identifier = "allow-update"
+description = "Allows the host's page to see what the app updater is doing, ask it to check now, and restart into a downloaded update."
+commands.allow = ["apply_update", "check_for_update", "update_status"]

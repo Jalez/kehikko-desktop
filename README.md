@@ -290,6 +290,17 @@ In the host repo it degrades silently in a browser — `__TAURI_INTERNALS__` is
 undefined, `tell()` returns, nothing is logged. That page runs in a plain tab far
 more often than in this window.
 
+### And then the updater's three
+
+`update_status`, `check_for_update` and `apply_update` (`src/update.rs`), so the
+host's Updates menu can show the app as one more row beside its modules and
+restart into a downloaded release. Same pattern: `permissions/update.toml`,
+`capabilities/update.json`, window `main`, 4170 and 4181. Unlike the theme, a
+host on a **configured** port is granted them too, at runtime, for exactly that
+port (`grant_update_commands_to` in `lib.rs`) — an Updates menu whose "restart"
+is refused would be worse than none. The contract is in
+[How updates work](#how-updates-work).
+
 ### What `background_color` does on macOS, and what it does not
 
 Do not assume it covers everything. It reaches two layers and misses a third:
@@ -444,14 +455,61 @@ After that it opens normally, and updates do not ask again.
 
 ### How updates work
 
-On launch a release build checks
+A release build running the host it carries checks
 `https://github.com/Jalez/kehikko-desktop/releases/latest/download/latest.json`
-in the background (`src-tauri/src/update.rs`). If there is a newer version a
-native dialog offers **Install and restart** or **Later**; installing replaces
-`Kehikot.app` in place — app and bundled host together — and restarts it,
-stopping the host and its modules first. "Later" asks again next launch. A failed
-check (offline, GitHub down) is a line on stderr and nothing else: it never holds
-up the window.
+in the background (`src-tauri/src/update.rs`) about five seconds after launch,
+every four hours after that, and shortly after the Mac wakes from sleep. A newer
+version is **downloaded at once, without asking**, and kept in memory once its
+signature checks out. Only one check or download runs at a time; a still newer
+release found while one is waiting replaces it once it, too, is downloaded and
+verified. A failed check (offline, GitHub down) is a line on stderr and a
+`failed` state: it never holds up the window.
+
+The shell draws no update UI of its own. **The host's page is the one place a
+person sees updates** — an indicator in its header and a "Kehikot app" row in its
+Updates menu, beside the modules — built against this contract:
+
+- **Status**, one shape everywhere:
+  `{ enabled, current, state, version, progress, error, checkedAt }` —
+  `state` is `idle` (not checked yet) | `checking` | `downloading` | `ready` |
+  `installing` | `failed` | `uptodate`; `version` is the update's, when there is
+  one; `progress` is 0–1 while downloading, `null` while the size is unknown;
+  `error` is the last failure until a check succeeds; `checkedAt` is Unix ms;
+  `enabled: false` means this build never checks (debug, or a checkout).
+- **Commands** (no arguments, via `window.__TAURI_INTERNALS__.invoke`):
+  `update_status` → status; `check_for_update` → starts a check unless one is
+  running, returns the status right after; `apply_update` → installs the `ready`
+  update and relaunches, stopping the host and its modules first (does nothing
+  in any other state).
+- **Push**: on every change the shell evaluates
+  `window.kehikotAppUpdate?.(status)` — a function the host's page defines, the
+  same `eval` channel the waiting room's `kehikkoStatus` uses. Called again after
+  every page load; while downloading, once per whole percent. A page should still
+  ask `update_status` once on mount.
+
+If an update is never applied, **it is installed when the app quits**
+(`Update::install` replaces the bundle on disk and does not relaunch on macOS),
+so the next launch is the new version. If the bundle's folder is not writable
+the updater asks for an administrator password at that point.
+
+A host page that predates this contract never asks `update_status`, so when an
+update becomes ready and the page has not once asked, the shell asks itself with
+a native alert — **Restart Now** or **Later** — carrying Kehikot's icon. That
+alert is an `NSAlert` built in `update.rs` with the icon set explicitly; the
+dialog plugin it replaces could fall back to a system-drawn alert with a generic
+icon.
+
+**Trying it without a release.** In a debug build, `KEHIKOT_UPDATE_DEMO=1`
+drives the same state machine with fake progress and no network — the commands
+answer and `kehikotAppUpdate` is called exactly as in a real update — and puts a
+small yellow test panel on the host's page that plays the host's half (debug
+only, never shipped). `=fail` fails the first download at 60%; `=dialog` shows
+the native alert at `ready`. For a real end-to-end run, build the newer version
+signed (`TAURI_SIGNING_PRIVATE_KEY`, `--config '{"version":"0.1.2"}'`), serve its
+`.app.tar.gz` and a `latest.json` on loopback, and build the older one with
+`--config '{"plugins":{"updater":{"endpoints":["http://127.0.0.1:PORT/latest.json"],"dangerousInsecureTransportProtocol":true}}}'`.
+Run it from a path with no symlink in it (`/private/tmp`, not `/tmp`: the
+updater refuses a symlinked executable path) and on a spare `KEHIKKO_PORT`.
 
 Every update archive is verified against the minisign public key in
 `tauri.conf.json` (`plugins.updater.pubkey`) before it is installed. That is
@@ -546,14 +604,14 @@ src-tauri/src/host.rs       where the host is, whether it is up, how to stop it
 src-tauri/src/titlebar.rs   the injection, and the argument against it
 src-tauri/src/rendering.rs  one private WebKit call, so the page keeps painting
 src-tauri/src/theme.rs      the remembered theme, and why the copy is not the truth
-src-tauri/src/update.rs     the in-place updater: check, ask, install, restart
+src-tauri/src/update.rs     the updater engine: check, download, install; the host draws the UI
 src-tauri/tauri.bundled.conf.json  the bundled host (externalBin), merged at build
 src-tauri/Entitlements.plist       JIT entitlements for the bundled host
 src-tauri/binaries/         the host binary, built per target (gitignored)
 host.ref                    which kehikko ref a release bundles
 .github/workflows/release.yml  the release: both arches, signed updates
-src-tauri/capabilities/     three commands, scoped to one window and one origin
-src-tauri/permissions/      what makes this app's own command nameable at all
+src-tauri/capabilities/     the commands the host's page may call, scoped to one window and its origins
+src-tauri/permissions/      what makes this app's own commands nameable at all
 src-tauri/examples/         the WebKit probe that produced the table above
 dist/index.html             the only page this shell serves: a waiting room
 ```
