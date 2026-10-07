@@ -1,6 +1,6 @@
 [package]
 name = "kehikko-desktop"
-version = "0.1.5"
+version = "0.1.6"
 description = "A window on the Kehikot workbench"
 authors = ["Jaakko Rajala"]
 edition = "2021"
