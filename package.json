@@ -1,7 +1,7 @@
 {
   "name": "kehikko-desktop",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "A window on the Kehikot workbench, and the thing that owns the host's lifetime.",
   "scripts": {
     "dev": "tauri dev",
