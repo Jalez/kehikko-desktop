@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kehikot",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "identifier": "fi.jalez.kehikko-desktop",
   "build": {
     "frontendDist": "../dist"
