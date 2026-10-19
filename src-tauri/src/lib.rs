@@ -25,6 +25,7 @@
 //! app update. Talk yourself out of the next one before you add it.
 
 mod host;
+mod links;
 mod rendering;
 mod theme;
 mod titlebar;
@@ -152,6 +153,13 @@ pub fn run() {
                 // the inset comes back as an 82-pixel hole where the traffic
                 // lights are not. Measured: the second page load in fullscreen
                 // reported the inset back at 82px before this hook existed.
+                // A link out of a module — `target="_blank"`, `window.open` —
+                // opens in the browser, and never as a window of this app. See
+                // `links.rs`.
+                .on_new_window(|url, _features| {
+                    links::open_outside(&url);
+                    tauri::webview::NewWindowResponse::Deny
+                })
                 .on_page_load(|webview, payload| {
                     let on = webview.is_fullscreen().unwrap_or(false);
                     let _ = webview.eval(&titlebar::fullscreen_script(on));
