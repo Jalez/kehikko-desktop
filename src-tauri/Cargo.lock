@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "kehikko-desktop"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "libc",
  "objc2",
