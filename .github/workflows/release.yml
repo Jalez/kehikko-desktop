@@ -100,11 +100,6 @@ jobs:
             notes="### What's new
           ${WHATS_NEW}
 
-          ### Install
-          **Download** \`Kehikot_${version}_aarch64.dmg\` for Macs with Apple silicon (M1 and later), or \`Kehikot_${version}_x64.dmg\` for Intel Macs. Open it and drag Kehikot to Applications.
-
-          Already have Kehikot? It updates itself: look for **Restart to update** in the header.
-
           <sub>Built from [Jalez/kehikko@${HOST_SHA:0:7}](https://github.com/Jalez/kehikko/commit/$HOST_SHA).</sub>"
             gh release create "$TAG" --draft --target "$GITHUB_SHA" \
               --title "Kehikot $TAG" --notes "$notes"
