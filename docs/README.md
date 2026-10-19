@@ -521,7 +521,10 @@ whoever runs one builds this app from source too.
    `src-tauri/Cargo.toml`, `package.json` (the release reads
    `tauri.conf.json`; the workflow fails if the tag disagrees).
 2. To pin the host, put a kehikko tag or SHA in `host.ref` (now: `main`).
-3. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Write `notes/X.Y.Z.md`: 1–5 bullets on what a person notices in this
+   release ([how](../CLAUDE.md#release-notes)). The workflow refuses to build
+   without it, or with placeholder or generic text.
+4. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 `.github/workflows/release.yml` (also runnable by hand, *workflow_dispatch*)
 creates a draft release, builds both architectures on macOS runners — checking

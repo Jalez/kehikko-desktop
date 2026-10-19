@@ -57,20 +57,50 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      # A release says what changed, in words a person cares about, or it is not
+      # cut. notes/<version>.md is written with the version bump (rules in
+      # CLAUDE.md); the app's release-notes modal shows exactly this section.
+      - name: Read the release notes
+        id: notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          version="${TAG#v}"
+          file="notes/${version}.md"
+          if [ ! -f "$file" ]; then
+            echo "::error file=$file::No release notes. Write $file: 1-5 bullets on what a person notices in $version (see CLAUDE.md, 'Release notes')."
+            exit 1
+          fi
+          # Drop HTML comments and an optional leading "What's new" heading.
+          body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i' "$file")"
+          if ! printf '%s\n' "$body" | grep -Eq '^[[:space:]]*[-*] .*[[:alpha:]]{3}'; then
+            echo "::error file=$file::$file has no bullet points. Write 1-5 bullets on what a person notices in $version."
+            exit 1
+          fi
+          if printf '%s\n' "$body" | grep -Eiq '\b(TODO|TBD|FIXME|lorem ipsum|placeholder|write (this|here))\b|bug fixes and (performance )?improvements'; then
+            echo "::error file=$file::$file still has placeholder or generic text. Say what actually changed for a person."
+            exit 1
+          fi
+          {
+            echo 'whats_new<<KEHIKOT_NOTES_END'
+            printf '%s\n' "$body"
+            echo 'KEHIKOT_NOTES_END'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create the draft release
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           HOST_SHA: ${{ steps.host.outputs.sha }}
+          WHATS_NEW: ${{ steps.notes.outputs.whats_new }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            # What a person reads on the release page: which file, and that it
-            # updates itself, under "Install". A "### What's new" section is
-            # written by hand above it after publishing; the app shows only that
-            # section in its release-notes modal.
             version="${TAG#v}"
-            notes="### Install
+            notes="### What's new
+          ${WHATS_NEW}
+
+          ### Install
           **Download** \`Kehikot_${version}_aarch64.dmg\` for Macs with Apple silicon (M1 and later), or \`Kehikot_${version}_x64.dmg\` for Intel Macs. Open it and drag Kehikot to Applications.
 
           Already have Kehikot? It updates itself: look for **Restart to update** in the header.
