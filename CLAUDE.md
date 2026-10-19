@@ -11,8 +11,9 @@
 ## Release notes
 
 `notes/<version>.md` is the "What's new" a person reads on the release page and
-in the app's release-notes modal. The workflow adds the download text and the
-host commit; the file holds only the bullets.
+in the app's release-notes modal. The workflow adds only a small host-commit line;
+the file holds the bullets. No download or install text: people know how to
+install an app.
 
 - Find what changed: this repo's merged PRs since the previous tag, plus the
   host's (Jalez/kehikko) first-parent merges between the previous release's host
