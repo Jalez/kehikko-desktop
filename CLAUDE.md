@@ -40,6 +40,10 @@ workflow_call`); a module's own `.github/workflows/release.yml` only calls it at
 module's `package.json`, is lightweight or is not on `main`, runs the same notes
 gate as above on the module's `notes/<version>.md`, installs, typechecks and
 tests, then publishes the release `<Module name> X.Y.Z` with the body
-`### What's new`, the bullets, and `<sub>Built from <sha7></sub>`. The host
+`### What's new`, the bullets, one line on which Kehikot it works with, and
+`<sub>Built from <sha7></sub>`. That line ("Works with Kehikot 0.1.39 and
+later.") is the module's protocol pin against the `app-v*` tags of Jalez/kehikko
+and each tag's `package.json`; when it cannot be worked out it says "Needs
+module protocol 2.6 or later.", and it never fails the release. The host
 parses that body: change it only together with the host. Module notes follow
 the "Release notes" rules above, from the module's side.
