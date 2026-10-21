@@ -29,3 +29,17 @@ install an app.
   placeholder), and so is a file without bullets.
 
 `notes/0.1.25.md` and the published 0.1.24/0.1.25 notes are the model.
+
+## Module releases
+
+Every Kehikot module is released the same way, and Kehikot installs and updates
+modules from those releases, not from a module's `main`.
+`.github/workflows/module-release.yml` is the one workflow they call (`on:
+workflow_call`); a module's own `.github/workflows/release.yml` only calls it at
+`@main` when a `v*` tag is pushed. It refuses a tag that does not match the
+module's `package.json`, is lightweight or is not on `main`, runs the same notes
+gate as above on the module's `notes/<version>.md`, installs, typechecks and
+tests, then publishes the release `<Module name> X.Y.Z` with the body
+`### What's new`, the bullets, and `<sub>Built from <sha7></sub>`. The host
+parses that body: change it only together with the host. Module notes follow
+the "Release notes" rules above, from the module's side.
