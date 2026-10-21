@@ -4,7 +4,8 @@
 #
 # A release is an annotated tag vX.Y.Z on a commit of `main`, with package.json
 # at X.Y.Z, plus a published GitHub Release named "<Module name> X.Y.Z" whose
-# body is "### What's new", the bullets of notes/X.Y.Z.md, and
+# body is "### What's new", the bullets of notes/X.Y.Z.md, one line saying
+# which Kehikot it works with ("Works with Kehikot 0.1.39 and later."), and
 # "<sub>Built from <sha7></sub>". The host reads exactly that; keep it.
 #
 # The caller, in the module repository:
@@ -121,6 +122,68 @@ jobs:
             echo 'KEHIKOT_NOTES_END'
           } >> "$GITHUB_OUTPUT"
 
+      # One line after the bullets: which Kehikot apps this release works with.
+      # The module's protocol pin, against the protocol each app shipped: the
+      # app-v* tags of the host repository and each tag's package.json. Never
+      # fails the release; when it cannot be worked out, the line names the
+      # protocol instead ("Needs module protocol 2.6 or later.").
+      - name: Say which Kehikot it works with
+        id: works
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOST_REPO: Jalez/kehikko
+        run: |
+          # Never fails the release: whatever goes wrong, the line falls back
+          # to the protocol, or is left out when the module pins none.
+          set +e
+          num() { IFS=. read -r a b c <<<"$1"; echo $(( a * 1000000000000 + b * 1000000 + c )); }
+          pin_of() { jq -r '(.dependencies["kehikot-module-protocol"] // .devDependencies["kehikot-module-protocol"] // "") | tostring' 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | tail -n1; }
+          need="$(pin_of < package.json)"
+          if [ -z "$need" ]; then
+            echo "package.json pins no kehikot-module-protocol version; the notes say nothing about which Kehikot."
+            echo "line=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          said="$need"
+          case "$need" in *.0) said="${need%.0}" ;; esac
+          line="Needs module protocol ${said} or later."
+          major="${need%%.*}"
+          want="$(num "$need")"
+          tags="$(git ls-remote --tags "https://github.com/${HOST_REPO}.git" 'refs/tags/app-v*' 2>/dev/null \
+            | awk '{ ref = $2; sub("refs/tags/app-v", "", ref)
+                     if (substr(ref, length(ref) - 2) == "^{}") { ref = substr(ref, 1, length(ref) - 3); peeled[ref] = $1 } else { object[ref] = $1 } }
+                   END { for (r in object) print r, ((r in peeled) ? peeled[r] : object[r]) }' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+ [0-9a-f]{40}$' \
+            | sort -t. -k1,1n -k2,2n -k3,3n)"
+          # The first app on the same protocol major that meets the pin; and,
+          # only when a later app moved to a higher major, the last one before it.
+          first=""
+          last=""
+          while read -r app commit; do
+            [ -n "$app" ] || continue
+            have="$(gh api -H 'Accept: application/vnd.github.raw' "repos/${HOST_REPO}/contents/package.json?ref=${commit}" 2>/dev/null | pin_of)"
+            [ -n "$have" ] || continue
+            if [ -z "$first" ]; then
+              if [ "${have%%.*}" = "$major" ] && [ "$(num "$have")" -ge "$want" ]; then
+                first="$app"
+                last="$app"
+                line="Works with Kehikot ${first} and later."
+              fi
+            elif [ "${have%%.*}" -gt "$major" ]; then
+              if [ "$first" = "$last" ]; then
+                line="Works with Kehikot ${first} (${app} moved to protocol ${have%%.*})."
+              else
+                line="Works with Kehikot ${first} to ${last} (${app} moved to protocol ${have%%.*})."
+              fi
+              break
+            else
+              last="$app"
+            fi
+          done <<<"$tags"
+          echo "$line"
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}
@@ -171,9 +234,14 @@ jobs:
           COMMIT: ${{ steps.version.outputs.commit }}
           NAME: ${{ steps.manifest.outputs.name }}
           WHATS_NEW: ${{ steps.notes.outputs.whats_new }}
+          WORKS_WITH: ${{ steps.works.outputs.line }}
         run: |
           body="$RUNNER_TEMP/release-body.md"
-          printf "### What's new\n%s\n\n<sub>Built from %s</sub>\n" "$WHATS_NEW" "${COMMIT:0:7}" > "$body"
+          if [ -n "$WORKS_WITH" ]; then
+            printf "### What's new\n%s\n\n%s\n\n<sub>Built from %s</sub>\n" "$WHATS_NEW" "$WORKS_WITH" "${COMMIT:0:7}" > "$body"
+          else
+            printf "### What's new\n%s\n\n<sub>Built from %s</sub>\n" "$WHATS_NEW" "${COMMIT:0:7}" > "$body"
+          fi
           title="$NAME $VERSION"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$body" \
