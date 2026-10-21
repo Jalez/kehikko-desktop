@@ -1,0 +1,185 @@
+# Release a Kehikot module: the workflow every module repository calls from its
+# own .github/workflows/release.yml when a `v*` tag is pushed. Kehikot installs
+# and updates modules from these releases, not from `main`.
+#
+# A release is an annotated tag vX.Y.Z on a commit of `main`, with package.json
+# at X.Y.Z, plus a published GitHub Release named "<Module name> X.Y.Z" whose
+# body is "### What's new", the bullets of notes/X.Y.Z.md, and
+# "<sub>Built from <sha7></sub>". The host reads exactly that; keep it.
+#
+# The caller, in the module repository:
+#
+#   name: release
+#   on:
+#     push:
+#       tags: ["v*"]
+#     workflow_dispatch:
+#   permissions:
+#     contents: write
+#   jobs:
+#     release:
+#       uses: Jalez/kehikko-desktop/.github/workflows/module-release.yml@main
+#
+# A private repository of another owner cannot call this file; it keeps an
+# inline copy of these steps instead (kehikko-flows does).
+name: module-release
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: The module's name in the release title. Read from the manifest when empty.
+        type: string
+        default: ""
+      manifest:
+        description: The file that exports the module's manifest.
+        type: string
+        default: manifest.ts
+      runs-on:
+        description: The runner. Modules run on Macs, so their tests run on one.
+        type: string
+        default: macos-latest
+      bun-version:
+        type: string
+        default: latest
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ${{ inputs.runs-on }}
+    concurrency:
+      group: module-release-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The tag, package.json and `main` have to agree before anything is built.
+      - name: Check the tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::Run this on a tag (vX.Y.Z), not on ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}."
+            exit 1
+          fi
+          tag="${GITHUB_REF_NAME}"
+          version="$(jq -r .version package.json)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error file=package.json::package.json version '$version' is not X.Y.Z."
+            exit 1
+          fi
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::Tag $tag does not match package.json version $version (expected v$version)."
+            exit 1
+          fi
+          type="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.type)"
+          if [ "$type" != "tag" ]; then
+            echo "::error::$tag is a lightweight tag. Make an annotated one: git tag -a $tag -m '$tag' <merge commit>."
+            exit 1
+          fi
+          commit="$(git rev-parse "$tag^{commit}")"
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::$tag points at $commit, which is not on main. Tag the merge commit on main."
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "commit=$commit"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read the release notes
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          file="notes/${VERSION}.md"
+          if [ ! -f "$file" ]; then
+            echo "::error file=$file::No release notes. Write $file: bullets on what a person notices in $VERSION (see notes/README.md)."
+            exit 1
+          fi
+          # Drop HTML comments, an optional leading "What's new" heading, and
+          # blank lines around the bullets.
+          body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i; s/\A\s+//; s/\s+\z//' "$file")"
+          if ! printf '%s\n' "$body" | grep -Eq '^[[:space:]]*[-*] .*[[:alpha:]]{3}'; then
+            echo "::error file=$file::$file has no bullet points. Write bullets on what a person notices in $VERSION."
+            exit 1
+          fi
+          if printf '%s\n' "$body" | grep -Eiq '\b(TODO|TBD|FIXME|lorem ipsum|placeholder|write (this|here))\b|bug fixes and (performance )?improvements'; then
+            echo "::error file=$file::$file still has placeholder or generic text. Say what actually changed for a person."
+            exit 1
+          fi
+          {
+            echo 'whats_new<<KEHIKOT_NOTES_END'
+            printf '%s\n' "$body"
+            echo 'KEHIKOT_NOTES_END'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      # Modules depend on the public protocol through git+ssh URLs; a runner has
+      # no SSH key, so fetch GitHub over https.
+      - name: Fetch GitHub dependencies over https
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # The manifest reports package.json's version; a release whose manifest
+      # says something else would be installed under the wrong number.
+      - name: Read the manifest
+        id: manifest
+        env:
+          MANIFEST: ${{ inputs.manifest }}
+          VERSION: ${{ steps.version.outputs.version }}
+          NAME: ${{ inputs.name }}
+        run: |
+          read_manifest='const m = await import(`${process.cwd()}/${process.env.MANIFEST}`)
+          const found = Object.values(m).find((v) => v && typeof v === "object" && typeof v.kind === "string" && typeof v.id === "string" && typeof v.name === "string" && typeof v.version === "string")
+          if (!found) { console.error(`no manifest exported from ${process.env.MANIFEST}`); process.exit(1) }
+          console.log(JSON.stringify({ name: found.name, version: found.version }))'
+          said="$(bun -e "$read_manifest")"
+          manifest_version="$(printf '%s' "$said" | jq -r .version)"
+          if [ "$manifest_version" != "$VERSION" ]; then
+            echo "::error file=$MANIFEST::The manifest reports $manifest_version, package.json says $VERSION. Make the manifest read package.json."
+            exit 1
+          fi
+          name="${NAME:-$(printf '%s' "$said" | jq -r .name)}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.version.outputs.commit }}
+          NAME: ${{ steps.manifest.outputs.name }}
+          WHATS_NEW: ${{ steps.notes.outputs.whats_new }}
+        run: |
+          body="$RUNNER_TEMP/release-body.md"
+          printf "### What's new\n%s\n\n<sub>Built from %s</sub>\n" "$WHATS_NEW" "${COMMIT:0:7}" > "$body"
+          title="$NAME $VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$body" \
+              --draft=false --prerelease=false --latest
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$title" \
+              --notes-file "$body" --latest
+          fi
+          echo "Released $title: $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
