@@ -568,11 +568,11 @@ pub fn apply(app: &AppHandle) {
                 std::thread::sleep(Duration::from_millis(600));
             }
         }
-        // Stop what we started before we go: `restart()` does not pass through
-        // the exit events that normally reap the host, and the new version
-        // would find the old host still on its port and adopt it.
+        // Stop what we started before we go, or the new version could find
+        // the old host still on its port and adopt it. Then relaunch so that
+        // it comes back in front — see `relaunch.rs`.
         crate::reap();
-        app.restart();
+        crate::relaunch::relaunch(&app);
     });
 }
 
