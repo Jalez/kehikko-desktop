@@ -127,6 +127,13 @@ pub fn run() {
                 .title("Kehikot")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 600.0)
+                // Files dropped on the window go to the page, as in a browser.
+                // With Tauri's own drop handling on (the default), macOS hands
+                // a dropped file to Tauri's event instead, and the page never
+                // sees a `drop` carrying it — so dropping a sound onto Settings ›
+                // Inbox sounds did nothing. Nothing here listens for Tauri's
+                // drop events.
+                .disable_drag_drop_handler()
                 // The very first frame, before any HTML exists to have an
                 // opinion. A window with no background colour is white, and it
                 // is on screen before the waiting room has been parsed — so
