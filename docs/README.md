@@ -489,6 +489,14 @@ If an update is never applied, **it is installed when the app quits**
 so the next launch is the new version. If the bundle's folder is not writable
 the updater asks for an administrator password at that point.
 
+**Relaunching.** Both restarts, `apply_update` and the host's restart file, go
+through `relaunch.rs`. From a bundle it runs `open -n -a Kehikot.app` rather
+than Tauri's `restart()`. `restart()` starts the executable directly, macOS does
+not bring a program started that way to the front, and the relaunched app came
+back behind everything else with only its Dock icon showing. LaunchServices
+activates what it opens. The new copy also gets `KEHIKKO_RELAUNCHED=1` and
+shows and focuses its window itself.
+
 A host page that predates this contract never asks `update_status`, so when an
 update becomes ready and the page has not once asked, the shell asks itself with
 a native alert — **Restart Now** or **Later** — carrying Kehikot's icon. That

@@ -26,6 +26,7 @@
 
 mod host;
 mod links;
+mod relaunch;
 mod rendering;
 mod theme;
 mod titlebar;
@@ -84,6 +85,11 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 static GROUP: AtomicI32 = AtomicI32::new(0);
 
 pub fn run() {
+    // Before any thread exists, because it edits the environment. A relaunch
+    // after an update or a restart brings its window forward on its own; see
+    // `relaunch.rs` for why a relaunched copy came back behind everything.
+    let relaunched = relaunch::take_mark();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -92,7 +98,7 @@ pub fn run() {
             update::check_for_update,
             update::apply_update
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let plan = host::plan();
             let page_port = plan.page_port();
 
@@ -195,6 +201,12 @@ pub fn run() {
 
             watch_fullscreen(&window);
 
+            // The person pressed Restart: the window they were looking at comes
+            // back in front, never as only an icon in the Dock.
+            if relaunched {
+                relaunch::bring_forward(&window);
+            }
+
             let handle = app.handle().clone();
             /* When the waiting room went up, so leaving it can wait for the
                mark to finish drawing — see `go`. */
@@ -225,7 +237,7 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error building the Kehikot shell")
-        .run(|app, event| match event {
+        .run(|app, event| {
             // Both, and in this order. `ExitRequested` is where a graceful quit
             // arrives with time to spare; `Exit` catches the paths that skip it.
             // `reap()` is written to be harmless the second time.
@@ -233,11 +245,14 @@ pub fn run() {
             // Then a downloaded update nobody restarted for is installed, so
             // the next launch is the new version — after the reap, because the
             // host being stopped lives inside the bundle being replaced.
-            RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 reap();
                 update::install_pending(app);
             }
-            _ => {}
+            // Last, when this quit is a restart: the new copy. See `relaunch.rs`.
+            if matches!(event, RunEvent::Exit) {
+                relaunch::start_if_asked(app);
+            }
         });
 }
 
@@ -503,9 +518,10 @@ fn quote(s: &str) -> String {
 ///
 /// The host's update modal writes `host::restart_file()` after pulling code its
 /// server needs to be restarted for. The host is stopped here, explicitly,
-/// before restarting: `restart()` does not pass through the exit events that
-/// normally reap it, and an app that came back to find the old host still on
-/// its port would adopt it — the exact stale server the restart was for.
+/// before restarting, rather than left to the exit events, so it is gone
+/// before anything new starts: an app that came back to find the old host
+/// still on its port would adopt it — the exact stale server the restart was
+/// for.
 fn watch_for_restart(handle: tauri::AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(500));
@@ -513,10 +529,10 @@ fn watch_for_restart(handle: tauri::AppHandle) {
         if file.exists() {
             let _ = std::fs::remove_file(&file);
             reap();
-            // A downloaded app update rides along, rather than being thrown
-            // away by a restart that does not pass through the exit events.
+            // A downloaded app update rides along, so the copy that comes back
+            // is the new version.
             update::install_pending(&handle);
-            handle.restart();
+            relaunch::relaunch(&handle);
         }
     });
 }
