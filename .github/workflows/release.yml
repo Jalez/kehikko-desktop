@@ -129,7 +129,13 @@ jobs:
           ref: ${{ needs.draft.outputs.host_sha }}
           path: kehikko
 
+      # Pinned, never "latest": this Bun is compiled into the host and installs every module
+      # (`bun install --frozen-lockfile`), so a newer one that reads the modules' lockfiles
+      # differently would break installs with no change of ours. Raise it on purpose, after a
+      # frozen install of each module's latest release passes with the new version.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
