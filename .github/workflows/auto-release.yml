@@ -1,0 +1,256 @@
+# Release the app whenever the host (or the app) has changed in a way a person
+# notices. Nobody bumps, writes notes or tags by hand. See CLAUDE.md, "Releases
+# are automatic".
+#
+# Every hour, from main: compare Jalez/kehikko's main with the commit the latest
+# release was built from ("Built from Jalez/kehikko@…"), and this repository's
+# main with the latest release's tag; collect the "## Release note" lines of the
+# pull requests merged in between (skipping `none`); check them with the
+# release gate and the host's module-agnostic check at that host commit. If any
+# are left: tag the next patch version on main (the notes and the host commit
+# in the tag's message) and build it with release.yml in this same run, since a
+# tag made with GITHUB_TOKEN starts no workflow of its own.
+#
+# Modes. `release` only for the schedule, or a manual run with mode=release, on
+# main of Jalez/kehikko-desktop. Everything else, a manual run with the default
+# mode=dry-run and a pull request that changes this file or dev/release, is a
+# dry run: it plans and prints the notes, and stops before tagging. Nothing is
+# ever built from a fork or a pull request.
+#
+# Failures. A failed release opens (or comments on) ONE issue, "Automatic app
+# release failed", and while it is open the scheduled runs do nothing. Fix what
+# it says, then close it; the next hourly run tries again.
+name: auto-release
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run: plan and print the notes, stop before tagging. release: tag and build."
+        type: choice
+        options: [dry-run, release]
+        default: dry-run
+      from:
+        description: "Dry run only: plan from this older release tag (vX.Y.Z) instead of the latest, to see what a range collects."
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - .github/workflows/auto-release.yml
+      - dev/release/**
+
+permissions: {}
+
+# One release at a time. Dry runs queue on their own, never behind a build.
+concurrency:
+  group: ${{ (github.event_name == 'schedule' || inputs.mode == 'release') && 'kehikot-app-release' || format('kehikot-app-dry-run-{0}', github.ref) }}
+  cancel-in-progress: false
+
+jobs:
+  mode:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+    steps:
+      - name: Release or dry run
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          ASKED: ${{ inputs.mode }}
+          FORK: ${{ github.event.repository.fork }}
+        run: |
+          mode=dry-run
+          if [ "$GITHUB_REPOSITORY" = "Jalez/kehikko-desktop" ] && [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$FORK" != "true" ]; then
+            if [ "$EVENT" = "schedule" ] || { [ "$EVENT" = "workflow_dispatch" ] && [ "$ASKED" = "release" ]; }; then
+              mode=release
+            fi
+          fi
+          echo "Mode: $mode ($EVENT on $GITHUB_REF of $GITHUB_REPOSITORY)"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+  plan:
+    needs: mode
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.plan.outputs.release == 'true' && steps.blocked.outputs.issue == '' }}
+      reason: ${{ steps.plan.outputs.reason }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      host_sha: ${{ steps.plan.outputs.host_sha }}
+      notes: ${{ steps.notes.outputs.notes }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MODE: ${{ needs.mode.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      # A failed release waits for a person: no retry while its issue is open.
+      - name: Is a failed release waiting
+        id: blocked
+        if: env.MODE == 'release'
+        run: |
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Automatic app release failed"' \
+            --json number,title --jq '[.[] | select(.title == "Automatic app release failed")][0].number // empty')"
+          if [ -n "$issue" ]; then
+            echo "::notice::Issue #$issue is open: an earlier automatic release failed. Fix it and close the issue; until then nothing is released."
+          fi
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+
+      - name: Plan the release
+        id: plan
+        if: steps.blocked.outputs.issue == ''
+        env:
+          FROM: ${{ inputs.from }}
+        run: |
+          if [ -n "$FROM" ] && [ "$MODE" = "dry-run" ]; then
+            echo "::notice::Dry run planned from $FROM, not from the latest release."
+            bun dev/release/plan-app.ts --notes-dir "$RUNNER_TEMP/notes" --from "$FROM"
+          else
+            bun dev/release/plan-app.ts --notes-dir "$RUNNER_TEMP/notes"
+          fi
+
+      - name: The release gate
+        if: steps.plan.outputs.release == 'true'
+        env:
+          FILE: ${{ steps.plan.outputs.notes_file }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: bash dev/release/notes-gate.sh "$FILE" "$VERSION" > /dev/null
+
+      - name: Check out the host commit's module-agnostic check
+        if: steps.plan.outputs.release == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Jalez/kehikko
+          ref: ${{ steps.plan.outputs.host_sha }}
+          path: host
+          persist-credentials: false
+          sparse-checkout: |
+            dev
+            modules.json
+          sparse-checkout-cone-mode: false
+
+      # The host's rule: no module and no vendor names, by the host's own list.
+      - name: No module or vendor names
+        if: steps.plan.outputs.release == 'true'
+        env:
+          FILE: ${{ steps.plan.outputs.notes_file }}
+        run: |
+          if [ -f host/dev/module-agnostic.ts ]; then
+            bun host/dev/module-agnostic.ts "$FILE"
+          elif [ "$MODE" = "release" ]; then
+            echo "::error::The host commit has no dev/module-agnostic.ts, so the notes cannot be checked for module and vendor names."
+            exit 1
+          else
+            echo "::warning::The host commit has no dev/module-agnostic.ts yet; module and vendor names were not checked (dry run)."
+          fi
+
+      - name: Hand the notes on
+        id: notes
+        if: steps.plan.outputs.release == 'true'
+        env:
+          FILE: ${{ steps.plan.outputs.notes_file }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          HOST_SHA: ${{ steps.plan.outputs.host_sha }}
+        run: |
+          {
+            echo 'notes<<KEHIKOT_NOTES_END'
+            cat "$FILE"
+            echo 'KEHIKOT_NOTES_END'
+          } >> "$GITHUB_OUTPUT"
+          if [ "$MODE" != "release" ]; then
+            echo "::notice::Dry run: would tag $TAG on $GITHUB_SHA and build it with the host at $HOST_SHA. Stopping before tagging."
+          fi
+
+  tag:
+    needs: [mode, plan]
+    if: needs.mode.outputs.mode == 'release' && needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The annotated tag carries the notes and the host commit, so release.yml
+      # can rebuild it by hand from the tag alone.
+      - name: Tag main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          NOTES: ${{ needs.plan.outputs.notes }}
+          HOST_SHA: ${{ needs.plan.outputs.host_sha }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG already exists. A release in flight or a stuck one? Nothing was tagged."
+            exit 1
+          fi
+          message="$(printf '%s\n\nKehikot-Host: Jalez/kehikko@%s\n' "$NOTES" "$HOST_SHA")"
+          obj="$(gh api "repos/$GITHUB_REPOSITORY/git/tags" -f tag="$TAG" -f object="$GITHUB_SHA" -f type=commit \
+            -f message="$message" --jq .sha)"
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$obj" >/dev/null
+          echo "Tagged $GITHUB_SHA as $TAG (host Jalez/kehikko@$HOST_SHA)."
+
+  build:
+    needs: [plan, tag]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      host_sha: ${{ needs.plan.outputs.host_sha }}
+      notes: ${{ needs.plan.outputs.notes }}
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      HOST_TAG_TOKEN: ${{ secrets.HOST_TAG_TOKEN }}
+
+  # One issue, opened or commented on; never one per run.
+  report:
+    needs: [mode, plan, tag, build]
+    if: failure() && needs.mode.outputs.mode == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REASON: ${{ needs.plan.outputs.reason }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          PLAN: ${{ needs.plan.result }}
+          TAGGED: ${{ needs.tag.result }}
+          BUILT: ${{ needs.build.result }}
+        run: |
+          title="Automatic app release failed"
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$PLAN" = "failure" ]; then
+            what="Planning failed${REASON:+: $REASON}. If a release note was refused (a module or vendor name, placeholder text), edit that merged pull request's **Release note** section."
+          elif [ "$TAGGED" = "failure" ]; then
+            what="Tagging $TAG failed. If the tag ruleset refused it, GitHub Actions needs to be a bypass actor on \"release tags are the owner's\" (CLAUDE.md, \"Releases are automatic\")."
+          else
+            what="Building $TAG failed; the tag and a draft release exist. Re-run release.yml on the tag (Actions, release, Run workflow, pick the tag), or delete the draft release and the tag."
+          fi
+          body="$(printf '%s\n\nRun: %s\n\nWhile this issue is open the hourly automatic release does nothing. Fix the cause, then close this issue; the next run tries again.' "$what" "$run")"
+          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
+            --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

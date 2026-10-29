@@ -33,6 +33,16 @@ sidecar="$here/src-tauri/binaries/kehikko-host-$triple"
 # CI, and a local build should not need it (or prompt for the keychain).
 build_args=(--bundles app --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}')
 
+# The version files are not bumped per release: a release stamps its tag's
+# version at build time (.github/workflows/release.yml). A local build says the
+# newest release's version, as it did when the files were bumped, so it is not
+# offered that same release as an update.
+git -C "$here" fetch -q --tags origin 2>/dev/null || true
+latest="$(git -C "$here" tag --list 'v*' --sort=-v:refname | head -n1)"
+if [ -n "$latest" ]; then
+  build_args+=(--config "{\"version\":\"${latest#v}\"}")
+fi
+
 if [ -n "$bun_target" ] && [ -f "$host_src/package.json" ] &&
   grep -q '"build:sidecar"' "$host_src/package.json"; then
   echo "building the bundled host from $host_src"

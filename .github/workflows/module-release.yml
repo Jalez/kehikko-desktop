@@ -1,6 +1,6 @@
 # Release a Kehikot module: the workflow every module repository calls from its
-# own .github/workflows/release.yml when a `v*` tag is pushed. Kehikot installs
-# and updates modules from these releases, not from `main`.
+# own .github/workflows/release.yml. Kehikot installs and updates modules from
+# these releases, not from `main`.
 #
 # A release is an annotated tag vX.Y.Z on a commit of `main`, with package.json
 # at X.Y.Z, plus a published GitHub Release named "<Module name> X.Y.Z" whose
@@ -8,11 +8,19 @@
 # which Kehikot it works with ("Works with Kehikot 0.1.39 and later."), and
 # "<sub>Built from <sha7></sub>". The host reads exactly that; keep it.
 #
+# Nobody tags by hand. On a push to main, the `tag` job checks whether
+# package.json's version is newer than the latest vX.Y.Z tag and
+# notes/<version>.md exists; if so it creates the annotated tag
+# (.github/actions/tag-on-merge) and the `release` job publishes it in the same
+# run, because a tag made with GITHUB_TOKEN starts no workflow of its own. A tag
+# pushed by hand (the owner) is still released the old way.
+#
 # The caller, in the module repository:
 #
 #   name: release
 #   on:
 #     push:
+#       branches: [main]
 #       tags: ["v*"]
 #     workflow_dispatch:
 #   permissions:
@@ -21,6 +29,7 @@
 #     release:
 #       uses: Jalez/kehikko-desktop/.github/workflows/module-release.yml@main
 #
+# A caller that still triggers on tags only keeps working: its runs skip `tag`.
 # A private repository of another owner cannot call this file; it keeps an
 # inline copy of these steps instead (kehikko-flows does).
 name: module-release
@@ -48,14 +57,40 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ${{ inputs.runs-on }}
+  # A merge to main that bumps the version is tagged here. Only a push (or a
+  # manual run) on main of the repository itself; never a fork, a pull request
+  # or another branch, and never the module template (its 0.1.0 is the
+  # starting point of every module made from it, not a release).
+  tag:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !github.event.repository.fork && !github.event.repository.is_template
+    runs-on: ubuntu-latest
     concurrency:
-      group: module-release-${{ github.repository }}-${{ github.ref }}
+      group: module-tag-${{ github.repository }}
       cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
+
+      - id: tag
+        uses: Jalez/kehikko-desktop/.github/actions/tag-on-merge@main
+
+  release:
+    needs: tag
+    # The tag this run made, or the tag this run was started on.
+    if: ${{ !cancelled() && !failure() && (needs.tag.outputs.tag != '' || github.ref_type == 'tag') }}
+    runs-on: ${{ inputs.runs-on }}
+    concurrency:
+      group: module-release-${{ github.repository }}-${{ needs.tag.outputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    env:
+      TAG: ${{ needs.tag.outputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
           fetch-depth: 0
 
       # The tag, package.json and `main` have to agree before anything is built.
@@ -64,11 +99,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "::error::Run this on a tag (vX.Y.Z), not on ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}."
+          if [ -z "$TAG" ] || ! printf '%s' "$TAG" | grep -Eq '^v'; then
+            echo "::error::Run this on a tag (vX.Y.Z), or let a merge to main make one, not on ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}."
             exit 1
           fi
-          tag="${GITHUB_REF_NAME}"
+          tag="$TAG"
           version="$(jq -r .version package.json)"
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error file=package.json::package.json version '$version' is not X.Y.Z."

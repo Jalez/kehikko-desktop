@@ -2,26 +2,68 @@
 # updater archives, and publish a GitHub Release with latest.json -- the file
 # every installed copy checks on launch.
 #
-# Cutting a release: bump the version in src-tauri/tauri.conf.json,
-# src-tauri/Cargo.toml and package.json, commit, `git tag vX.Y.Z`, push the tag.
-# See docs/README.md, "Releases and updates".
+# Releases are cut automatically: auto-release.yml tags the next version on
+# main and calls this workflow with the tag, the host commit and the notes (see
+# CLAUDE.md, "Releases are automatic"). The version is the TAG's: it is stamped
+# into tauri.conf.json, Cargo.toml and package.json at build time, and the
+# version in those files is not bumped by hand.
+#
+# It still runs on a vX.Y.Z tag pushed by the owner (with notes/<version>.md
+# committed), and by hand on a tag ref (workflow_dispatch) to rebuild a release
+# whose build failed; the notes and the host commit then come from the tag's
+# message when they are not in the repository. Never on a branch, a pull
+# request or a fork. See docs/README.md, "Releases and updates".
 name: release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: The vX.Y.Z tag to build; it already exists, on a commit of main.
+        type: string
+        required: true
+      host_sha:
+        description: The Jalez/kehikko commit to bundle.
+        type: string
+        required: true
+      notes:
+        description: The bullets of "What's new".
+        type: string
+        required: true
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: true
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
+      APPLE_CERTIFICATE:
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      HOST_TAG_TOKEN:
+        required: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   # One draft release up front, so both architectures upload into the same one.
   draft:
+    if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.release.outputs.id }}
@@ -29,14 +71,46 @@ jobs:
       host_sha: ${{ steps.host.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
 
-      # host.ref names a branch, tag or commit of Jalez/kehikko. It is resolved to
-      # one commit here, once, so both architectures bundle the same host and the
-      # release can say exactly which.
+      # Only a vX.Y.Z tag on a commit of main is built.
+      - name: Read the version
+        id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          if [ -z "$INPUT_TAG" ] && [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::Run this on a tag (vX.Y.Z), not on ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME}."
+            exit 1
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::$tag is not vX.Y.Z."
+            exit 1
+          fi
+          commit="$(git rev-parse "$tag^{commit}")"
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::$tag points at $commit, which is not on main."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The host commit: the one auto-release planned with, else the one the
+      # tag's message names ("Kehikot-Host: Jalez/kehikko@<sha>"), else host.ref,
+      # a branch, tag or commit of Jalez/kehikko. It is resolved to one commit
+      # here, once, so both architectures bundle the same host and the release
+      # can say exactly which.
       - name: Resolve the host commit
         id: host
+        env:
+          INPUT_HOST_SHA: ${{ inputs.host_sha }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          ref="$(tr -d '[:space:]' < host.ref)"
+          said="$(git tag -l --format='%(contents)' "$TAG" | sed -n 's/^Kehikot-Host: Jalez\/kehikko@\([0-9a-f]\{40\}\)$/\1/p' | tail -n1)"
+          ref="${INPUT_HOST_SHA:-${said:-$(tr -d '[:space:]' < host.ref)}}"
           if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
             sha="$ref"
           else
@@ -46,41 +120,26 @@ jobs:
           echo "Host: Jalez/kehikko@$sha (from host.ref '$ref')"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: Read the version
-        id: version
-        run: |
-          version="$(jq -r .version src-tauri/tauri.conf.json)"
-          tag="v$version"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "$tag" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match tauri.conf.json version $version"
-            exit 1
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
       # A release says what changed, in words a person cares about, or it is not
-      # cut. notes/<version>.md is written with the version bump (rules in
-      # CLAUDE.md); the app's release-notes modal shows exactly this section.
+      # cut. The notes are auto-release's (from the merged pull requests' Release
+      # note lines), or notes/<version>.md committed with a hand release, or the
+      # tag's message when rebuilding; the gate (dev/release/notes-gate.sh, rules
+      # in CLAUDE.md) is the same for all three. The app's release-notes modal
+      # shows exactly this section.
       - name: Read the release notes
         id: notes
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          INPUT_NOTES: ${{ inputs.notes }}
         run: |
           version="${TAG#v}"
           file="notes/${version}.md"
-          if [ ! -f "$file" ]; then
-            echo "::error file=$file::No release notes. Write $file: 1-5 bullets on what a person notices in $version (see CLAUDE.md, 'Release notes')."
-            exit 1
+          if [ -n "$INPUT_NOTES" ]; then
+            printf '%s\n' "$INPUT_NOTES" > "$file"
+          elif [ ! -f "$file" ]; then
+            git tag -l --format='%(contents)' "$TAG" | grep -v '^Kehikot-Host: ' > "$file" || true
           fi
-          # Drop HTML comments and an optional leading "What's new" heading.
-          body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i' "$file")"
-          if ! printf '%s\n' "$body" | grep -Eq '^[[:space:]]*[-*] .*[[:alpha:]]{3}'; then
-            echo "::error file=$file::$file has no bullet points. Write 1-5 bullets on what a person notices in $version."
-            exit 1
-          fi
-          if printf '%s\n' "$body" | grep -Eiq '\b(TODO|TBD|FIXME|lorem ipsum|placeholder|write (this|here))\b|bug fixes and (performance )?improvements'; then
-            echo "::error file=$file::$file still has placeholder or generic text. Say what actually changed for a person."
-            exit 1
-          fi
+          body="$(bash dev/release/notes-gate.sh "$file" "$version")"
           {
             echo 'whats_new<<KEHIKOT_NOTES_END'
             printf '%s\n' "$body"
@@ -122,6 +181,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.draft.outputs.tag }}
 
       - uses: actions/checkout@v4
         with:
@@ -163,6 +224,24 @@ jobs:
 
       - name: Install the Tauri CLI
         run: npm ci
+
+      # The version is the tag's. The files in the repository are not bumped per
+      # release; the app, its updater entry and the bundle all read these.
+      - name: Stamp the version
+        env:
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: |
+          version="${TAG#v}"
+          for f in src-tauri/tauri.conf.json package.json; do
+            jq --arg v "$version" '.version = $v' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          done
+          V="$version" perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' src-tauri/Cargo.toml
+          V="$version" perl -0pi -e 's/(name = "kehikko-desktop"\nversion = )"[^"]*"/$1"$ENV{V}"/' src-tauri/Cargo.lock
+          [ "$(jq -r .version src-tauri/tauri.conf.json)" = "$version" ] &&
+            grep -q "^version = \"$version\"" src-tauri/Cargo.toml &&
+            grep -A1 '^name = "kehikko-desktop"$' src-tauri/Cargo.lock | grep -q "^version = \"$version\"" ||
+            { echo "::error::Could not stamp $version into the version files."; exit 1; }
+          echo "Building Kehikot $version"
 
       - uses: tauri-apps/tauri-action@v0
         env:
