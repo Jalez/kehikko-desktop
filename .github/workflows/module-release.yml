@@ -59,9 +59,10 @@ permissions:
 jobs:
   # A merge to main that bumps the version is tagged here. Only a push (or a
   # manual run) on main of the repository itself; never a fork, a pull request
-  # or another branch.
+  # or another branch, and never the module template (its 0.1.0 is the
+  # starting point of every module made from it, not a release).
   tag:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !github.event.repository.fork
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !github.event.repository.fork && !github.event.repository.is_template
     runs-on: ubuntu-latest
     concurrency:
       group: module-tag-${{ github.repository }}
