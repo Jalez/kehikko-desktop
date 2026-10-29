@@ -525,18 +525,29 @@ whoever runs one builds this app from source too.
 
 ### Cutting a release
 
-1. Bump the version in **all three**: `src-tauri/tauri.conf.json`,
-   `src-tauri/Cargo.toml`, `package.json` (the release reads
-   `tauri.conf.json`; the workflow fails if the tag disagrees).
-2. To pin the host, put a kehikko tag or SHA in `host.ref` (now: `main`).
-3. Write `notes/X.Y.Z.md`: 1–5 bullets on what a person notices in this
-   release ([how](../CLAUDE.md#release-notes)). The workflow refuses to build
-   without it, or with placeholder or generic text.
-4. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+Releases are automatic; nobody bumps, writes notes or tags by hand (CLAUDE.md,
+"Releases are automatic").
 
-`.github/workflows/release.yml` (also runnable by hand, *workflow_dispatch*)
-creates a draft release, builds both architectures on macOS runners — checking
-out `Jalez/kehikko` at `host.ref`, compiling the host with
+1. Every pull request here and in `Jalez/kehikko` has a `## Release note`
+   section: one line a person notices, or `none`.
+2. `.github/workflows/auto-release.yml` runs hourly from `main`. It compares the
+   host's `main` (`host.ref`) with the commit the latest release was built from,
+   and this repository's `main` with the latest tag, collects the release-note
+   lines of the PRs merged in between, and when any are left tags the next patch
+   version (`vX.Y.(Z+1)`, the notes and the host commit in the tag message) and
+   calls `release.yml` with them. A manual run defaults to a dry run that stops
+   before tagging.
+3. `release.yml` stamps the tag's version into `src-tauri/tauri.conf.json`,
+   `src-tauri/Cargo.toml` and `package.json` at build time. The version in those
+   files is not bumped per release.
+
+To pin the host, put a kehikko tag or SHA in `host.ref` (now: `main`). A tag
+pushed by the owner, with `notes/X.Y.Z.md` committed, still releases.
+
+`.github/workflows/release.yml` (also runnable by hand on a tag, *workflow_dispatch*,
+to rebuild a failed release) creates a draft release, builds both architectures
+on macOS runners — checking out `Jalez/kehikko` at the planned host commit,
+compiling the host with
 `bun run build:sidecar --target bun-darwin-{arm64,x64}` into
 `src-tauri/binaries/kehikko-host-<target-triple>` — signs the updater archives,
 uploads the `.dmg`, the `.app.tar.gz` + `.sig` and a `latest.json` covering both,
@@ -637,6 +648,10 @@ src-tauri/Entitlements.plist       JIT entitlements for the bundled host
 src-tauri/binaries/         the host binary, built per target (gitignored)
 host.ref                    which kehikko ref a release bundles
 .github/workflows/release.yml  the release: both arches, signed updates
+.github/workflows/auto-release.yml  hourly: tag and release when merged PRs carry release notes
+.github/workflows/module-release.yml  every module's release, tagged on merge
+.github/actions/            tag-on-merge (modules, protocol) and the release-note check
+dev/release/                version and note logic for the above, with tests
 src-tauri/capabilities/     the commands the host's page may call, scoped to one window and its origins
 src-tauri/permissions/      what makes this app's own commands nameable at all
 src-tauri/examples/         the WebKit probe that produced the table above

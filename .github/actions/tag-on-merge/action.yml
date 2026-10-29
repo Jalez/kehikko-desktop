@@ -1,0 +1,97 @@
+# Tag a release when a merge to main bumps the version: if package.json's
+# version is newer than every vX.Y.Z tag and its notes are written, create the
+# annotated tag v<version> on the pushed commit and output it, so the caller can
+# build the release in the same run (a tag made with GITHUB_TOKEN starts no
+# other workflow). Used by module-release.yml for every module, and by the
+# protocol's ci.yml.
+#
+# Runs only for a push (or a manual run) on main of a repository that is not a
+# fork. Needs `contents: write`, the repository checked out at the pushed commit,
+# and the tag ruleset to let GitHub Actions create v* tags (see CLAUDE.md,
+# "Releases are tagged on merge").
+name: Tag on merge
+description: Create the vX.Y.Z tag when package.json's version is newer than the latest tag and its notes exist.
+
+inputs:
+  notes:
+    description: Where a version's notes are; {version} is replaced. Ignored when `changelog` is set.
+    default: notes/{version}.md
+  changelog:
+    description: A CHANGELOG file that must have a "## X.Y.Z" entry instead of a notes file (the protocol).
+    default: ""
+  token:
+    description: The token that creates the tag.
+    default: ${{ github.token }}
+
+outputs:
+  tag:
+    description: The tag created by this run, or empty when this push is not a release.
+    value: ${{ steps.create.outputs.tag }}
+  version:
+    description: The version tagged, or empty.
+    value: ${{ steps.plan.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Only main, never a fork
+      shell: bash
+      env:
+        FORK: ${{ github.event.repository.fork }}
+      run: |
+        if [ "$GITHUB_REF" != "refs/heads/main" ] || [ "$FORK" = "true" ]; then
+          echo "::error::Tags are made only from a push to main of the repository itself (this is $GITHUB_REF, fork: $FORK)."
+          exit 1
+        fi
+        case "$GITHUB_EVENT_NAME" in push|workflow_dispatch) ;; *)
+          echo "::error::Tags are made only on a push to main or a manual run, not on $GITHUB_EVENT_NAME."
+          exit 1 ;;
+        esac
+
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.4.4
+
+    - name: Is this push a release
+      id: plan
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        NOTES: ${{ inputs.notes }}
+        CHANGELOG: ${{ inputs.changelog }}
+      run: |
+        if [ -n "$CHANGELOG" ]; then
+          bun "$GITHUB_ACTION_PATH/../../../dev/release/plan-tag.ts" --changelog "$CHANGELOG"
+        else
+          bun "$GITHUB_ACTION_PATH/../../../dev/release/plan-tag.ts" --notes "$NOTES"
+        fi
+
+    - name: Create the tag
+      id: create
+      if: steps.plan.outputs.action == 'tag'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TAG: ${{ steps.plan.outputs.tag }}
+      run: |
+        commit="$(git rev-parse HEAD)"
+        if [ "$commit" != "$GITHUB_SHA" ]; then
+          echo "::error::The checkout is at $commit, not the pushed commit $GITHUB_SHA."
+          exit 1
+        fi
+        obj="$(gh api "repos/$GITHUB_REPOSITORY/git/tags" -f tag="$TAG" -f object="$GITHUB_SHA" -f type=commit \
+          -f message="$TAG" --jq .sha)"
+        if ! gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$obj" >/dev/null; then
+          # Someone may have pushed the same tag by hand a moment ago: fine if it
+          # is the same commit (that push releases it too; the release step edits
+          # the release it finds), wrong otherwise.
+          there="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null || true)"
+          [ -n "$there" ] && there="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$there" --jq .object.sha 2>/dev/null || echo "$there")"
+          if [ "$there" != "$GITHUB_SHA" ]; then
+            echo "::error::Could not create $TAG on $GITHUB_SHA${there:+ (it already points at $there)}. If the ruleset refused it, see CLAUDE.md, 'Releases are tagged on merge'."
+            exit 1
+          fi
+          echo "$TAG already points at $GITHUB_SHA."
+        fi
+        echo "Tagged $GITHUB_SHA as $TAG."
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"

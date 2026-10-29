@@ -1,0 +1,52 @@
+# Pull request checks. Read-only, no secrets.
+#
+# release-note: the description's "## Release note" section, the line the app's
+# release page will carry (or `none`); the same check the host runs, with the
+# host's module-agnostic list from its main. Editing the description re-runs it.
+# release-scripts: the tests of dev/release, which decide versions and notes.
+name: checks
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  release-note:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Jalez/kehikko
+          path: host
+          persist-credentials: false
+          sparse-checkout: |
+            dev
+            modules.json
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/release-note
+        with:
+          body: ${{ github.event.pull_request.body }}
+          host-dir: host
+
+  release-scripts:
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Test
+        run: bun test dev/release

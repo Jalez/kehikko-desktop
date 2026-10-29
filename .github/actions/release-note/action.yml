@@ -1,0 +1,42 @@
+# Check a pull request's "## Release note" section: present, one line a person
+# notices (or `none`), not a placeholder, and naming no module and no vendor
+# (the host's rule, checked with the host's own dev/module-agnostic.ts). The app
+# is released automatically from these lines (auto-release.yml), with the same
+# parser (dev/release/lib.ts, parsePrNote).
+name: Release note
+description: Check a pull request's Release note section.
+
+inputs:
+  body:
+    description: The pull request description.
+    required: true
+  host-dir:
+    description: A checkout of Jalez/kehikko (at least dev/ and modules.json) whose module-agnostic check is used.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.4.4
+
+    - name: Read the release note
+      shell: bash
+      env:
+        BODY: ${{ inputs.body }}
+      run: bun "$GITHUB_ACTION_PATH/../../../dev/release/pr-note.ts" --out "$RUNNER_TEMP/release-note.md"
+
+    - name: Check it
+      shell: bash
+      env:
+        HOST_DIR: ${{ inputs.host-dir }}
+      run: |
+        note="$RUNNER_TEMP/release-note.md"
+        [ -s "$note" ] || exit 0
+        bash "$GITHUB_ACTION_PATH/../../../dev/release/notes-gate.sh" "$note" "this pull request" >/dev/null
+        if [ -f "$HOST_DIR/dev/module-agnostic.ts" ]; then
+          bun "$HOST_DIR/dev/module-agnostic.ts" "$note"
+        else
+          echo "::warning::$HOST_DIR has no dev/module-agnostic.ts yet; module and vendor names were not checked."
+        fi
