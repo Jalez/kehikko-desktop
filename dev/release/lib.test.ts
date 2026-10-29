@@ -82,6 +82,12 @@ describe('a pull request release note', () => {
     expect(parsePrNote('## Release note\nShown.\n### detail\nAlso part.\n## Testing\nNot part.')).toEqual({ kind: 'note', lines: ['Shown.', '### detail', 'Also part.'] })
   })
 
+  test('the section is its first paragraph: a footer after a blank line is not part of it', () => {
+    const footer = '\n\n🤖 Generated with [a tool](https://example.com)\n\nhttps://example.com/session'
+    expect(parsePrNote(`## Release note\n\nnone${footer}`)).toEqual({ kind: 'none' })
+    expect(parsePrNote(`## Release note\n\n- **One.** First.\n- **Two.** Second.${footer}`)).toEqual({ kind: 'note', lines: ['**One.** First.', '**Two.** Second.'] })
+  })
+
   test('missing: no section, an empty one, only the template comment, or no body at all', () => {
     expect(parsePrNote('## What changes\nStuff.')).toEqual({ kind: 'missing' })
     expect(parsePrNote(template(''))).toEqual({ kind: 'missing' })

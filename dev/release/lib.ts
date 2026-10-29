@@ -77,10 +77,11 @@ export type PrNote = { kind: 'note'; lines: string[] } | { kind: 'none' } | { ki
 const NONE = /^[`"'*_]*none[`"'*_.]*$/i
 
 /**
- * The `## Release note` section of a pull request description: every
- * non-empty line up to the next heading of the same or a higher level, with
- * HTML comments (the template's guidance) removed and a leading bullet mark
- * dropped. `none` (in any case, in backticks) means nothing for the release
+ * The `## Release note` section of a pull request description: the first
+ * paragraph under the heading (the lines up to a blank line, or the next
+ * heading of the same or a higher level), with HTML comments (the template's
+ * guidance) removed and a leading bullet mark dropped. Whatever follows a blank
+ * line (a footer, a signature) is not part of it. `none` (in any case, in backticks) means nothing for the release
  * page. No section, or a section left empty, is `missing`.
  */
 export function parsePrNote(body: string | null | undefined): PrNote {
@@ -95,6 +96,7 @@ export function parsePrNote(body: string | null | undefined): PrNote {
     if (heading && heading[1].length <= level) break
     const said = line.trim().replace(/^[-*+]\s+/, '').trim()
     if (said) out.push(said)
+    else if (out.length) break
   }
   if (!out.length) return { kind: 'missing' }
   if (out.every((line) => NONE.test(line))) return { kind: 'none' }
