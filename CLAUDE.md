@@ -19,6 +19,13 @@ Nobody bumps the version, writes the notes file or tags by hand.
   next patch version on `main` (annotated; message = the bullets plus
   `Kehikot-Host: Jalez/kehikko@<sha>`) and calls `release.yml` in the same run.
   The logic is `dev/release/` (`plan-app.ts`, `lib.ts`, tested by `lib.test.ts`).
+- Order for a module that needs a newer protocol: when a module's release pins a
+  protocol newer than the host's pin, the host pin is bumped and the app released
+  FIRST (this workflow), then the module is released. A released app cannot
+  install a module that needs more than it speaks. The check is the host's
+  `dev/protocol-ahead.ts`, run daily by `protocol-ahead.yml` there, which opens
+  one issue when a module's newest release is ahead of the host pin. It warns
+  and does not block this workflow: an unrelated app fix should not wait.
 - The version is the TAG's. `release.yml` stamps it into `tauri.conf.json`,
   `Cargo.toml`/`Cargo.lock` and `package.json` at build time; those files stay at
   the last hand-bumped version and are not edited per release. `dev/install.sh`
