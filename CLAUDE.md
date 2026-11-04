@@ -59,6 +59,10 @@ install an app.
   the place in the app ("the Updates menu", "a module's header").
 - No commit hashes, PR numbers, file or function names, protocol versions,
   "refactor", or hype ("powerful", "seamless", "exciting").
+- Write for people, not for the protocol. When a release needs a newer Kehikot,
+  name the app version ("Needs Kehikot 0.1.110 or later"), never the module
+  protocol number: people deal with the app and the modules, not the protocol.
+  The app shows the protocol, for whoever wants it, in Settings > About.
 - Never invent. A change only to how releases are built or delivered, tests,
   docs or a refactor is `none`: it releases nothing by itself.
 - Generic text is refused by the workflow ("bug fixes and improvements", TODO,
