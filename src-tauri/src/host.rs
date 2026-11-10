@@ -132,7 +132,7 @@ fn sidecar() -> Option<PathBuf> {
 }
 
 /// The bundled host's port: `$KEHIKKO_PORT`, then `"port"` in the config file,
-/// then 4170.
+/// then the first seat in `HOST_PORTS` (`choose_port`).
 fn bundled_port() -> u16 {
     if let Some(p) = std::env::var("KEHIKKO_PORT")
         .ok()
@@ -140,10 +140,172 @@ fn bundled_port() -> u16 {
     {
         return p;
     }
-    std::fs::read_to_string(config_path())
+    if let Some(p) = std::fs::read_to_string(config_path())
         .ok()
         .and_then(|text| json_number(&text, "port"))
-        .unwrap_or(BUNDLED_PORT)
+    {
+        return p;
+    }
+    let avoid = registered_ports();
+    choose_port(&avoid, seat, ephemeral_port)
+}
+
+/// The ports the bundled host may take, in order: 4170 first, then the rest of
+/// 4170–4199. Module ports (the official list's run from about 7800 up, and a
+/// module that moves takes the next free one after its own) are never in it.
+/// 4180 and 4181 are skipped: they are a checkout's host (`DEFAULT_API_PORT`),
+/// which this app does not adopt by accident.
+pub const HOST_PORTS: std::ops::RangeInclusive<u16> = 4170..=4199;
+const CHECKOUT_PORTS: [u16; 2] = [DEFAULT_API_PORT, DEFAULT_API_PORT + 1];
+
+/// What is on a port, as far as choosing one goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Seat {
+    /// Nothing listening: start the host there.
+    Free,
+    /// A Kehikot host answers `/host/health` there: adopt it, as before.
+    Host,
+    /// Something else holds it: never show it as the app, never start there.
+    Taken,
+}
+
+/// Which port the bundled host runs on. Pure: `seat` says what is on a port,
+/// `os` asks the system for any free port.
+///
+/// The first port of `HOST_PORTS` (skipping a checkout's two and every port in
+/// `avoid` — what this machine's module registrations name) that is free or
+/// already has a Kehikot host on it. When every one is held by something else,
+/// a port the system picks — those come from the ephemeral range, never a
+/// module's. Only when even that fails, 4170, and the start says what holds it.
+///
+/// The case this exists for: the host must never sit on a module's port. A
+/// module's port held by Kehikot's own page is a module that cannot start
+/// there, and a container that reads "Something is answering … not JSON".
+pub fn choose_port(avoid: &[u16], seat: impl Fn(u16) -> Seat, os: impl FnOnce() -> Option<u16>) -> u16 {
+    for port in HOST_PORTS {
+        if CHECKOUT_PORTS.contains(&port) || avoid.contains(&port) {
+            continue;
+        }
+        match seat(port) {
+            Seat::Free | Seat::Host => return port,
+            Seat::Taken => {}
+        }
+    }
+    os().filter(|p| !avoid.contains(p)).unwrap_or(BUNDLED_PORT)
+}
+
+/// What is on `port` right now. On 4170, a listener that does not answer
+/// `/host/health` is asked for two seconds before it is called something else:
+/// a host that is still starting opens its port before it is healthy, and a
+/// second host beside it would be the very thing this avoids. The rest of the
+/// range is asked once, so a full range does not hold the window for a minute.
+fn seat(port: u16) -> Seat {
+    if !listening(port) {
+        return Seat::Free;
+    }
+    let grace = if port == BUNDLED_PORT { 2 } else { 0 };
+    let until = std::time::Instant::now() + Duration::from_secs(grace);
+    loop {
+        if healthy(port) {
+            return Seat::Host;
+        }
+        if std::time::Instant::now() >= until {
+            return Seat::Taken;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// A free port the system chooses: bound, read and let go.
+fn ephemeral_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok()?;
+    listener.local_addr().ok().map(|a| a.port())
+}
+
+/// The ports this machine's module registrations name (`http://127.0.0.1:<port>`
+/// in `<machine dir>/modules/*.json`, or `$KEHIKOT_MODULES_DIR`). Read as text:
+/// a port is all that is wanted from them.
+fn registered_ports() -> Vec<u16> {
+    let dir = std::env::var("KEHIKOT_MODULES_DIR")
+        .ok()
+        .filter(|d| !d.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join("Library").join("Application Support").join("Kehikot").join("modules"));
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut ports = Vec::new();
+    for entry in entries.flatten() {
+        if let Ok(text) = std::fs::read_to_string(entry.path()) {
+            ports.extend(ports_in(&text));
+        }
+    }
+    ports
+}
+
+/// Every port named as `127.0.0.1:<port>` or `localhost:<port>` in `text`. Pure.
+pub fn ports_in(text: &str) -> Vec<u16> {
+    let mut out = Vec::new();
+    for host in ["127.0.0.1:", "localhost:"] {
+        let mut rest = text;
+        while let Some(at) = rest.find(host) {
+            rest = &rest[at + host.len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(p) = digits.parse() {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[test]
+    fn takes_4170_when_free() {
+        assert_eq!(choose_port(&[], |_| Seat::Free, || Some(50000)), 4170);
+    }
+
+    #[test]
+    fn adopts_a_host_already_on_4170() {
+        assert_eq!(choose_port(&[], |p| if p == 4170 { Seat::Host } else { Seat::Free }, || None), 4170);
+    }
+
+    #[test]
+    fn moves_up_the_range_past_something_else() {
+        assert_eq!(choose_port(&[], |p| if p == 4170 { Seat::Taken } else { Seat::Free }, || None), 4171);
+    }
+
+    #[test]
+    fn skips_a_checkouts_ports_and_registered_ones() {
+        let seat = |p: u16| if p < 4180 { Seat::Taken } else { Seat::Free };
+        assert_eq!(choose_port(&[], seat, || None), 4182);
+        assert_eq!(choose_port(&[4182, 4183], seat, || None), 4184);
+    }
+
+    #[test]
+    fn never_a_module_port_when_the_range_is_full() {
+        // The whole range held: the system's choice, never a port a module names.
+        assert_eq!(choose_port(&[], |_| Seat::Taken, || Some(53111)), 53111);
+        assert_eq!(choose_port(&[8010], |_| Seat::Taken, || Some(8010)), BUNDLED_PORT);
+        for p in choose_port_candidates() {
+            assert!(!(7800..=9100).contains(&p));
+        }
+    }
+
+    fn choose_port_candidates() -> Vec<u16> {
+        HOST_PORTS.collect()
+    }
+
+    #[test]
+    fn reads_ports_from_registrations() {
+        let text = r#"{ "id": "kehikot.claude", "url": "http://127.0.0.1:8011", "dir": "/x" }"#;
+        assert_eq!(ports_in(text), vec![8011]);
+        assert_eq!(ports_in("url: http://localhost:7920\n"), vec![7920]);
+        assert!(ports_in("{}").is_empty());
+    }
 }
 
 /// The variable that tells a host we started where to ask for a restart.
