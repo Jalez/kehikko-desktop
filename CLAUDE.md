@@ -70,6 +70,24 @@ install an app.
 
 `notes/0.1.25.md` and the published 0.1.24/0.1.25 notes are the model.
 
+### For agents
+
+A release that changes what an agent session sees or may do — a new or changed
+tool, a rule it is held to, a guard — says so for the sessions already running,
+which are told once, at their next prompt after the update (module protocol
+2.61.0). The people's bullets stay as above; this is beside them.
+
+- A module: a `## For agents` section at the end of `notes/<version>.md`, one or
+  two bullets in the agent's terms, naming the tool or rule:
+  `- \`queue_wait\` waits for a run and answers when it ends; use it instead of polling \`queue_status\`.`
+  Tool and function names are right here (agents call them); no hype, no
+  people's benefits, nothing an agent cannot act on. A release with nothing new
+  for agents has no section. People never see it in the app (the host shows a
+  module's notes without it); it stays on the GitHub release.
+- The host: a `## <next number>` section at the top of the host's
+  `FOR_AGENTS.md`, in the same PR, under the same rules plus the host's own (no
+  module or vendor named). Not in the PR's `## Release note`.
+
 ## Module releases
 
 Every Kehikot module is released the same way, and Kehikot installs and updates
