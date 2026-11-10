@@ -650,6 +650,7 @@ host.ref                    which kehikko ref a release bundles
 .github/workflows/release.yml  the release: both arches, signed updates
 .github/workflows/auto-release.yml  hourly: tag and release when merged PRs carry release notes
 .github/workflows/module-release.yml  every module's release, tagged on merge
+.github/workflows/module-ci.yml  every module's pull request checks: install, typecheck, test, build
 .github/actions/            tag-on-merge (modules, protocol) and the release-note check
 dev/release/                version and note logic for the above, with tests
 src-tauri/capabilities/     the commands the host's page may call, scoped to one window and its origins

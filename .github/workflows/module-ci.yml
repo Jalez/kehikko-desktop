@@ -1,0 +1,101 @@
+# Check a Kehikot module on every pull request: the workflow every module
+# repository calls from its own .github/workflows/ci.yml. It installs, then
+# typechecks, tests and builds, skipping whatever the module does not have.
+#
+# The caller, in the module repository:
+#
+#   name: ci
+#   on:
+#     pull_request:
+#     push:
+#       branches: [main]
+#   permissions:
+#     contents: read
+#   jobs:
+#     ci:
+#       uses: Jalez/kehikko-desktop/.github/workflows/module-ci.yml@main
+#
+# Inputs (all optional): `runners` is a JSON list of runners, ubuntu only by
+# default (`'["ubuntu-latest","macos-latest"]'` for both); `env` is extra
+# environment for the test and build steps, one NAME=value per line (`CI=1`);
+# `bun-version` matches module-release. A private repository of another owner
+# cannot call this file; it keeps an inline copy of these steps instead.
+name: module-ci
+
+on:
+  workflow_call:
+    inputs:
+      runners:
+        description: A JSON list of runners to run on.
+        type: string
+        default: '["ubuntu-latest"]'
+      env:
+        description: Extra environment for the typecheck, test and build steps, one NAME=value per line.
+        type: string
+        default: ""
+      bun-version:
+        type: string
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: ci (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.runners) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      # Extra environment for the steps below.
+      - name: Set the extra environment
+        if: inputs.env != ''
+        env:
+          EXTRA_ENV: ${{ inputs.env }}
+        run: |
+          while IFS= read -r line; do
+            [ -n "$line" ] && printf '%s\n' "$line" >> "$GITHUB_ENV"
+          done <<<"$EXTRA_ENV"
+
+      # Modules depend on the public protocol through git+ssh URLs; a runner has
+      # no SSH key, so fetch GitHub over https.
+      - name: Fetch GitHub dependencies over https
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        shell: bash
+        run: |
+          if jq -e '.scripts.typecheck' package.json >/dev/null 2>&1; then
+            bun run typecheck
+          elif [ -f tsconfig.json ]; then
+            bunx tsc --noEmit
+          else
+            echo "No typecheck script and no tsconfig.json; skipped."
+          fi
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        shell: bash
+        run: |
+          if jq -e '.scripts.build' package.json >/dev/null 2>&1; then
+            bun run build
+          else
+            echo "No build script; skipped."
+          fi
