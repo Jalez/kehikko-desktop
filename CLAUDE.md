@@ -88,6 +88,19 @@ which are told once, at their next prompt after the update (module protocol
   `FOR_AGENTS.md`, in the same PR, under the same rules plus the host's own (no
   module or vendor named). Not in the PR's `## Release note`.
 
+## Module checks
+
+`.github/workflows/module-ci.yml` is the one workflow every module calls (`on:
+workflow_call`) from its own `.github/workflows/ci.yml`, on `pull_request` and
+on a push to `main`, at `@main`. It installs with `--frozen-lockfile`, then runs
+`bun run typecheck` (else `bunx tsc --noEmit` when there is a tsconfig),
+`bun test` and `bun run build`, skipping what a module lacks. Inputs, all
+optional: `runners` (a JSON list, `["ubuntu-latest"]` by default; add
+`"macos-latest"` for a module whose tests need a Mac), `env` (NAME=value lines
+for the steps, e.g. `CI=1`) and `bun-version`. A private repository of another
+owner cannot call it and keeps an inline copy. A CI-only change bumps no
+version and has no notes, so it releases nothing.
+
 ## Module releases
 
 Every Kehikot module is released the same way, and Kehikot installs and updates
