@@ -529,12 +529,16 @@ Releases are automatic; nobody bumps, writes notes or tags by hand (CLAUDE.md,
 "Releases are automatic").
 
 1. Every pull request here and in `Jalez/kehikko` has a `## Release note`
-   section: one line a person notices, or `none`.
+   section: a `Kind: breaking | feature | fix | none` line, then one line a
+   person notices (nothing more for `none`).
 2. `.github/workflows/auto-release.yml` runs hourly from `main`. It compares the
    host's `main` (`host.ref`) with the commit the latest release was built from,
    and this repository's `main` with the latest tag, collects the release-note
-   lines of the PRs merged in between, and when any are left tags the next patch
-   version (`vX.Y.(Z+1)`, the notes and the host commit in the tag message) and
+   lines of the PRs merged in between, and when any are left tags the next
+   version by semver from the largest kind among them (while 0.x: breaking →
+   `vX.(Y+1).0`, otherwise `vX.Y.(Z+1)`; from 1.0: breaking → major, feature →
+   minor, fix → patch; a note without a kind counts as a fix), with the notes
+   grouped Breaking / New / Fixed and the host commit in the tag message, and
    calls `release.yml` with them. A manual run defaults to a dry run that stops
    before tagging.
 3. `release.yml` stamps the tag's version into `src-tauri/tauri.conf.json`,
@@ -543,6 +547,47 @@ Releases are automatic; nobody bumps, writes notes or tags by hand (CLAUDE.md,
 
 To pin the host, put a kehikko tag or SHA in `host.ref` (now: `main`). A tag
 pushed by the owner, with `notes/X.Y.Z.md` committed, still releases.
+
+### Versions follow semver
+
+The app, every module and the protocol follow Semantic Versioning. Each change
+declares its kind, and the version is the one that kind asks for after the
+latest tag. While the major is 0 a breaking change is the next minor and
+anything else the next patch; from 1.0 the full rule applies.
+
+| Latest | `Kind: breaking` | `Kind: feature` | `Kind: fix` |
+| --- | --- | --- | --- |
+| 0.x (0.1.9) | 0.2.0 | 0.1.10 | 0.1.10 |
+| ≥ 1.0 (1.4.2) | 2.0.0 | 1.5.0 | 1.4.3 |
+
+`breaking` is something removed, or no longer working the same way; `feature`
+something new; `fix` a fix. `Kind: none` (a PR's release note only) releases
+nothing.
+
+- **The app.** A PR's `## Release note` section starts with the `Kind:` line;
+  the hourly planner takes the largest kind among the merged PRs.
+- **A module.** `notes/<version>.md` starts with the `Kind:` line, before the
+  bullets:
+
+  ```markdown
+  Kind: feature
+
+  - **Short bold lead.** One plain sentence.
+  ```
+
+  The release page leaves the line out. On every pull request,
+  `module-ci.yml` runs `.github/actions/version-kind`
+  (`dev/release/check-bump.ts`): when `package.json`'s version is past the
+  latest `vX.Y.Z` tag, the notes must exist, declare a kind, and the version
+  must be exactly the one the table gives — a `breaking` with only a patch
+  bump fails, and so does a `fix` with a minor one. The error names the version
+  to use. No module repository needs a change for this; they call
+  `module-ci.yml@main`.
+- **The protocol.** The same action in its `ci.yml`, with
+  `changelog: CHANGELOG.md`: the `Kind:` line is the first line of the
+  `## X.Y.Z` entry.
+
+Run it locally in a module: `bun <kehikko-desktop>/dev/release/check-bump.ts --local`.
 
 `.github/workflows/release.yml` (also runnable by hand on a tag, *workflow_dispatch*,
 to rebuild a failed release) creates a draft release, builds both architectures
@@ -650,8 +695,8 @@ host.ref                    which kehikko ref a release bundles
 .github/workflows/release.yml  the release: both arches, signed updates
 .github/workflows/auto-release.yml  hourly: tag and release when merged PRs carry release notes
 .github/workflows/module-release.yml  every module's release, tagged on merge
-.github/workflows/module-ci.yml  every module's pull request checks: install, typecheck, test, build
-.github/actions/            tag-on-merge (modules, protocol) and the release-note check
+.github/workflows/module-ci.yml  every module's pull request checks: version against its kind, install, typecheck, test, build
+.github/actions/            tag-on-merge and version-kind (modules, protocol), and the release-note check
 dev/release/                version and note logic for the above, with tests
 src-tauri/capabilities/     the commands the host's page may call, scoped to one window and its origins
 src-tauri/permissions/      what makes this app's own commands nameable at all

@@ -13,7 +13,7 @@ if [ ! -f "$file" ]; then
   echo "::error file=$file::No release notes. Write $file: 1-5 bullets on what a person notices in $version (see CLAUDE.md, 'Release notes')."
   exit 1
 fi
-body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i' "$file")"
+body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i; s/\A\s*[`*_]*kind[`*_]*[ \t]*:[^\n]*\n?//i' "$file")"
 if ! printf '%s\n' "$body" | grep -Eq '^[[:space:]]*[-*] .*[[:alpha:]]{3}'; then
   echo "::error file=$file::$file has no bullet points. Write 1-5 bullets on what a person notices in $version."
   exit 1

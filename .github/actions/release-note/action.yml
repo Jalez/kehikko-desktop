@@ -1,5 +1,6 @@
-# Check a pull request's "## Release note" section: present, one line a person
-# notices (or `none`), not a placeholder, and naming no module and no vendor
+# Check a pull request's "## Release note" section: present, starting with its
+# kind (`Kind: breaking | feature | fix | none`, which the app's version
+# follows), then one line a person notices (nothing for `none`), not a placeholder, and naming no module and no vendor
 # (the host's rule, checked with the host's own dev/module-agnostic.ts). The app
 # is released automatically from these lines (auto-release.yml), with the same
 # parser (dev/release/lib.ts, parsePrNote).

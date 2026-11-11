@@ -5,20 +5,30 @@
 Nobody bumps the version, writes the notes file or tags by hand.
 
 - Every PR here and in Jalez/kehikko fills in `## Release note`
-  (`.github/pull_request_template.md`): one line in the form below, or `none`.
-  The `release note` check (`.github/actions/release-note`, run by `checks.yml`
-  here and `release-note.yml` in the host) fails a PR without it, with
-  placeholder text, or naming a module or vendor (the host's
-  `dev/module-agnostic.ts`). A desktop-only change releases the same way.
+  (`.github/pull_request_template.md`): first a line `Kind: breaking`,
+  `Kind: feature`, `Kind: fix` or `Kind: none`, then one line in the form below
+  (none for `Kind: none`). The `release note` check
+  (`.github/actions/release-note`, run by `checks.yml` here and
+  `release-note.yml` in the host) fails a PR without the kind, with an unknown
+  one, without the line, with placeholder text, or naming a module or vendor
+  (the host's `dev/module-agnostic.ts`). A desktop-only change releases the
+  same way.
 - `.github/workflows/auto-release.yml`, hourly from `main` (and by hand): compares
   the host's `main` with the commit the latest release was built from (its body,
   "Built from Jalez/kehikko@…"), and this repo's `main` with the latest `v*` tag;
   collects the release-note lines of the PRs merged in between (`none` and PRs
   without the section are skipped); runs the notes gate and the host's
   module-agnostic check at that host commit; and when lines are left, tags the
-  next patch version on `main` (annotated; message = the bullets plus
+  next version on `main` (annotated; message = the bullets plus
   `Kehikot-Host: Jalez/kehikko@<sha>`) and calls `release.yml` in the same run.
   The logic is `dev/release/` (`plan-app.ts`, `lib.ts`, tested by `lib.test.ts`).
+- The next version follows semver from the LARGEST kind among the collected
+  PRs (`bump`, `nextVersion` in `lib.ts`): while the major is 0, a `breaking`
+  PR makes the next minor (0.1.140 → 0.2.0) and anything else the next patch
+  (→ 0.1.141); from 1.0, breaking → major, feature → minor, fix → patch. A note
+  merged before kinds (no `Kind:` line) counts as `fix`. The notes are grouped
+  `#### Breaking`, `#### New`, `#### Fixed` (inside the release's
+  `### What's new`), empty groups left out.
 - Order for a module that needs a newer protocol: when a module's release pins a
   protocol newer than the host's pin, the host pin is bumped and the app released
   FIRST (this workflow), then the module is released. A released app cannot
@@ -88,11 +98,36 @@ which are told once, at their next prompt after the update (module protocol
   `FOR_AGENTS.md`, in the same PR, under the same rules plus the host's own (no
   module or vendor named). Not in the PR's `## Release note`.
 
+## Versions follow semver
+
+Kehikot, every module and the protocol follow Semantic Versioning, and CI
+enforces it. A change declares its kind — `breaking` (something removed, or no
+longer working the same way), `feature` (something new), `fix`, or `none` (no
+release) — and the version is the one that kind asks for after the latest tag:
+
+| Latest | breaking | feature | fix |
+| --- | --- | --- | --- |
+| 0.x (0.1.9) | minor (0.2.0) | patch (0.1.10) | patch (0.1.10) |
+| ≥ 1.0 (1.4.2) | major (2.0.0) | minor (1.5.0) | patch (1.4.3) |
+
+- The app: the PR's `## Release note` starts `Kind: …`; the planner takes the
+  largest (above).
+- A module: `notes/<version>.md` starts with `Kind: breaking | feature | fix`
+  (before the bullets; the release page leaves the line out). `module-ci.yml`
+  fails a PR whose `package.json` version moved past the latest tag without
+  those notes, without a kind, or to any version but exactly the one its kind
+  asks for (`.github/actions/version-kind`, logic `dev/release/check-bump.ts`).
+  Pick the version with the table, from the latest tag at the time you open
+  the PR; renumber if another release lands first.
+- The protocol: the same check in its `ci.yml`, on the `Kind:` line at the top
+  of its `## X.Y.Z` CHANGELOG entry.
+
 ## Module checks
 
 `.github/workflows/module-ci.yml` is the one workflow every module calls (`on:
 workflow_call`) from its own `.github/workflows/ci.yml`, on `pull_request` and
-on a push to `main`, at `@main`. It installs with `--frozen-lockfile`, then runs
+on a push to `main`, at `@main`. On a pull request it first checks the version
+against its kind ("Versions follow semver"). It installs with `--frozen-lockfile`, then runs
 `bun run typecheck` (else `bunx tsc --noEmit` when there is a tsconfig),
 `bun test` and `bun run build`, skipping what a module lacks. Inputs, all
 optional: `runners` (a JSON list, `["ubuntu-latest"]` by default; add
@@ -114,8 +149,9 @@ workflow_call`); a module's own `.github/workflows/release.yml` only calls it at
   `v<version>` (annotated, on the pushed commit) when `package.json`'s version is
   newer than every `v*` tag and `notes/<version>.md` exists, and the `release`
   job publishes it in the same run. Same version: nothing. Newer without notes,
-  or older: the run fails and says so. A module PR bumps `package.json` and adds
-  the notes; merging it is releasing it.
+  or older: the run fails and says so. A module PR bumps `package.json` (by
+  its kind, "Versions follow semver") and adds the notes; merging it is
+  releasing it.
 - The `release` job refuses a tag that does not match the module's
   `package.json`, is lightweight or is not on `main`, runs the same notes gate as
   above on the module's `notes/<version>.md`, installs, typechecks and tests,

@@ -1,0 +1,43 @@
+# Check that a pull request's version bump matches the kind of change its notes
+# declare (Kehikot follows semver). package.json at the latest vX.Y.Z tag passes
+# (not a release); a newer version needs its notes (or CHANGELOG entry) to start
+# with `Kind: breaking | feature | fix` and to be exactly the version that kind
+# asks for after the latest tag: while 0.x, breaking → minor and anything else →
+# patch; from 1.0, breaking → major, feature → minor, fix → patch. Logic:
+# dev/release/check-bump.ts (tested in lib.test.ts). Used by module-ci.yml for
+# every module, and by the protocol's ci.yml.
+#
+# Needs the repository checked out and a token that can read its tags.
+name: Version matches its kind
+description: Fail when package.json's version bump does not match the Kind its notes declare.
+
+inputs:
+  notes:
+    description: Where a version's notes are; {version} is replaced. Ignored when `changelog` is set.
+    default: notes/{version}.md
+  changelog:
+    description: A CHANGELOG file whose "## X.Y.Z" entry holds the Kind line instead of a notes file (the protocol).
+    default: ""
+  token:
+    description: The token that reads the repository's tags.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.4.4
+
+    - name: Does the version match its kind
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        NOTES: ${{ inputs.notes }}
+        CHANGELOG: ${{ inputs.changelog }}
+      run: |
+        if [ -n "$CHANGELOG" ]; then
+          bun "$GITHUB_ACTION_PATH/../../../dev/release/check-bump.ts" --changelog "$CHANGELOG"
+        else
+          bun "$GITHUB_ACTION_PATH/../../../dev/release/check-bump.ts" --notes "$NOTES"
+        fi
