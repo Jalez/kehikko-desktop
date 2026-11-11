@@ -9,11 +9,10 @@ import { APP_REPO, mirrorRelease, realGh } from './mirror'
 const dryRun = process.argv.includes('--dry-run')
 const gh = realGh()
 
-type Row = { tagName: string; isDraft: boolean; isPrerelease: boolean; publishedAt: string }
-const rows: Row[] = JSON.parse(await gh(['api', '--paginate', `repos/${APP_REPO}/releases?per_page=100`, '--jq', '[.[] | {tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease, publishedAt: .published_at}]']).then((s) => {
-  // --paginate with --jq prints one array per page
-  return JSON.stringify(s.trim().split('\n').flatMap((l) => JSON.parse(l)))
-}))
+type Row = { tagName: string; isDraft: boolean; body: string }
+// --paginate with --jq prints one array per page, one page per line
+const rows: Row[] = (await gh(['api', '--paginate', `repos/${APP_REPO}/releases?per_page=100`, '--jq', '[.[] | {tagName: .tag_name, isDraft: .draft, body: (.body // "")}]']))
+  .trim().split('\n').flatMap((l) => JSON.parse(l))
 
 const semver = /^v(\d+)\.(\d+)\.(\d+)$/
 const releases = rows
@@ -28,8 +27,7 @@ const skipped: string[] = []
 const conflicts: string[] = []
 let created = 0
 for (const [i, r] of releases.entries()) {
-  const body = (await gh(['release', 'view', r.tagName, '--repo', APP_REPO, '--json', 'body', '--jq', '.body'])).toString()
-  const res = await mirrorRelease(gh, { tag: r.tagName, appBody: body, latest: i === releases.length - 1, dryRun })
+  const res = await mirrorRelease(gh, { tag: r.tagName, appBody: r.body, latest: i === releases.length - 1, dryRun })
   console.log(`${res.tag}: ${res.outcome} - ${res.detail}`)
   if (res.outcome === 'created') {
     created++
