@@ -63,6 +63,15 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: Jalez/kehikko-desktop/.github/actions/version-kind@main
 
+      # Release order, as a warning only: the app may be released before this
+      # pull request merges. The release itself refuses (module-release.yml).
+      - name: The app already speaks the module's protocol
+        if: github.event_name == 'pull_request' && matrix.os == fromJSON(inputs.runners)[0]
+        continue-on-error: true
+        uses: Jalez/kehikko-desktop/.github/actions/protocol-order@main
+        with:
+          mode: warn
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}

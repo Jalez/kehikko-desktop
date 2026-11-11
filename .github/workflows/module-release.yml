@@ -29,6 +29,11 @@
 #     release:
 #       uses: Jalez/kehikko-desktop/.github/workflows/module-release.yml@main
 #
+# Release order: before tagging, the pinned kehikot-module-protocol must not be
+# newer than the protocol of the newest published Kehikot app release
+# (.github/actions/protocol-order); the run is refused with what to do, and
+# re-running it after the app is released passes.
+#
 # A caller that still triggers on tags only keeps working: its runs skip `tag`.
 # A private repository of another owner cannot call this file; it keeps an
 # inline copy of these steps instead (kehikko-flows does).
@@ -74,6 +79,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Release order: refuse before anything is tagged or published while the
+      # module pins a protocol newer than the newest app release speaks. Release
+      # the app first, then re-run this workflow.
+      - name: The app already speaks the module's protocol
+        uses: Jalez/kehikko-desktop/.github/actions/protocol-order@main
+        with:
+          mode: refuse
+
       - id: tag
         uses: Jalez/kehikko-desktop/.github/actions/tag-on-merge@main
 
@@ -92,6 +105,14 @@ jobs:
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
+
+      # A tag pushed by hand skips the `tag` job, so the order is checked here;
+      # a tag made by this run was checked there.
+      - name: The app already speaks the module's protocol
+        if: needs.tag.outputs.tag == ''
+        uses: Jalez/kehikko-desktop/.github/actions/protocol-order@main
+        with:
+          mode: refuse
 
       # The tag, package.json and `main` have to agree before anything is built.
       - name: Check the tag

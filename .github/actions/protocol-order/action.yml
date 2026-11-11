@@ -1,0 +1,34 @@
+# Release order: the module's pinned kehikot-module-protocol against the protocol
+# of the newest PUBLISHED Kehikot app release. A released app cannot install a
+# module that needs a newer protocol, so the app is released first (protocol tag
+# → host pinned to it, app released → modules). `mode: refuse` fails the run with
+# what to do (module-release.yml, before tagging and publishing); `mode: warn`
+# only prints a warning (module-ci.yml). A pin or release that cannot be read is
+# a warning and a pass. Logic: dev/release/protocol-order.ts (tested in
+# protocol-order.test.ts).
+#
+# Needs the module checked out (its package.json is read).
+name: Protocol is released
+description: Refuse (or warn) when the module pins a protocol newer than the newest published app release speaks.
+
+inputs:
+  mode:
+    description: "refuse (fail the run) or warn (never fail)."
+    default: refuse
+  token:
+    description: The token that reads the app and host repositories.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.4.4
+
+    - name: The app already speaks the module's protocol
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        MODE: ${{ inputs.mode }}
+      run: bun "$GITHUB_ACTION_PATH/../../../dev/release/protocol-order.ts" --mode "$MODE"

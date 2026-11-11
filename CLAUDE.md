@@ -36,6 +36,17 @@ Nobody bumps the version, writes the notes file or tags by hand.
   `dev/protocol-ahead.ts`, run daily by `protocol-ahead.yml` there, which opens
   one issue when a module's newest release is ahead of the host pin. It warns
   and does not block this workflow: an unrelated app fix should not wait.
+- The same order is ENFORCED for modules: `module-release.yml` runs
+  `.github/actions/protocol-order` (`dev/release/protocol-order.ts`, tested by
+  `protocol-order.test.ts`) before tagging or publishing, and refuses the release
+  while the module's pinned `kehikot-module-protocol` (a `#vX.Y.Z` tag, or a commit
+  resolved through the API; else the installed package) is newer than the protocol
+  of the newest PUBLISHED app release (its body's "Built from Jalez/kehikko@<sha>",
+  that commit's `package.json` pin). The message says to release the app first
+  (host pinned, app released) and re-run the workflow, which then passes.
+  `module-ci.yml` runs the same check as a warning only (the app may be released
+  before the module PR merges). A pin or release it cannot read, or a GitHub rate
+  limit that outlasts its retries, is a warning and a pass, with the reason.
 - The version is the TAG's. `release.yml` stamps it into `tauri.conf.json`,
   `Cargo.toml`/`Cargo.lock` and `package.json` at build time; those files stay at
   the last hand-bumped version and are not edited per release. `dev/install.sh`
