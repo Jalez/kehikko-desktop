@@ -64,6 +64,17 @@ Nobody bumps the version, writes the notes file or tags by hand.
   next plan refuses to start past a stuck draft.
 - Tagging needs GitHub Actions (Integration 15368) as a bypass actor on the
   "release tags are the owner's" ruleset; `main` keeps no bypass but the owner's.
+- Releases: see Jalez/kehikko's Releases; downloads are attached to this
+  repo's. After `release.yml` publishes a release, its last step
+  (`dev/release/mirror-release.ts`, logic `mirror.ts`, tested by
+  `mirror.test.ts`) creates the same version on Jalez/kehikko with
+  `HOST_TAG_TOKEN`: plain tag `vX.Y.Z` on the "Built from" commit (the hand
+  `app-vX.Y.Z` tags stay), title "Kehikot vX.Y.Z", the same "What's new", then
+  "Built from <sha>" and "Download: <this repo's release>", no binaries, flagged
+  latest. Idempotent: an existing release is skipped, an existing tag is used
+  only if it points at that commit (else the step fails and says so). Without
+  the token the step is skipped. `dev/release/backfill-mirror.ts [--dry-run]`
+  did the past releases once (oldest first, `gh` auth of whoever runs it).
 - A hand release still works: commit `notes/<v>.md` and push an annotated
   `v<v>` tag as the owner. Do not do this while `auto-release` is running.
 
