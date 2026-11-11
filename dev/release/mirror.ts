@@ -107,10 +107,20 @@ export async function mirrorRelease(
     ])
     await gh(['api', `repos/${HOST_REPO}/git/refs`, '-f', `ref=refs/tags/${tag}`, '-f', `sha=${obj.trim()}`])
   }
-  await gh([
+  const create = [
     'release', 'create', tag, '--repo', HOST_REPO, '--verify-tag', '--title', mirrorTitle(tag),
     '--notes', mirrorBody(o.appBody, sha, url), `--latest=${o.latest}`,
-  ])
+  ]
+  // A tag just made through the API is sometimes not yet visible to the release call.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await gh(create)
+      break
+    } catch (e) {
+      if (attempt >= 5 || !/doesn't exist|not found/i.test(String(e))) throw e
+      await new Promise((r) => setTimeout(r, 2000 * attempt))
+    }
+  }
   return { tag, outcome: 'created', detail: `${step.tag ? 'tagged and ' : ''}released ${tag} at ${sha.slice(0, 7)}${o.latest ? ' (latest)' : ''}` }
 }
 
