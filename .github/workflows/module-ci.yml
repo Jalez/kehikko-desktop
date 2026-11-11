@@ -1,6 +1,8 @@
 # Check a Kehikot module on every pull request: the workflow every module
-# repository calls from its own .github/workflows/ci.yml. It installs, then
-# typechecks, tests and builds, skipping whatever the module does not have.
+# repository calls from its own .github/workflows/ci.yml. On a pull request it
+# first checks that a version bump matches the kind of change notes/<version>.md
+# declares (semver; .github/actions/version-kind). Then it installs, typechecks,
+# tests and builds, skipping whatever the module does not have.
 #
 # The caller, in the module repository:
 #
@@ -52,6 +54,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      # A version bump says its kind: notes/<version>.md starts with
+      # `Kind: breaking | feature | fix`, and the version is the one that kind
+      # asks for after the latest tag (0.x: breaking → minor, otherwise patch;
+      # from 1.0: breaking → major, feature → minor, fix → patch).
+      - name: The version matches its kind
+        if: github.event_name == 'pull_request'
+        uses: Jalez/kehikko-desktop/.github/actions/version-kind@main
 
       - uses: oven-sh/setup-bun@v2
         with:

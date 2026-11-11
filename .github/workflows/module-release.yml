@@ -140,9 +140,10 @@ jobs:
             echo "::error file=$file::No release notes. Write $file: bullets on what a person notices in $VERSION (see notes/README.md)."
             exit 1
           fi
-          # Drop HTML comments, an optional leading "What's new" heading, and
-          # blank lines around the bullets.
-          body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i; s/\A\s+//; s/\s+\z//' "$file")"
+          # Drop HTML comments, an optional leading "What's new" heading, the
+          # leading `Kind:` line (semver; module-ci checks it), and blank lines
+          # around the bullets.
+          body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i; s/\A\s*[`*_]*kind[`*_]*[ \t]*:[^\n]*\n?//i; s/\A\s+//; s/\s+\z//' "$file")"
           if ! printf '%s\n' "$body" | grep -Eq '^[[:space:]]*[-*] .*[[:alpha:]]{3}'; then
             echo "::error file=$file::$file has no bullet points. Write bullets on what a person notices in $VERSION."
             exit 1

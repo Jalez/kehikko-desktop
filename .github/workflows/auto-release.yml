@@ -7,8 +7,10 @@
 # main with the latest release's tag; collect the "## Release note" lines of the
 # pull requests merged in between (skipping `none`); check them with the
 # release gate and the host's module-agnostic check at that host commit. If any
-# are left: tag the next patch version on main (the notes and the host commit
-# in the tag's message) and build it with release.yml in this same run, since a
+# are left: tag the next version on main, by semver from the largest `Kind:`
+# among them (while 0.x: breaking → minor, otherwise patch; CLAUDE.md,
+# "Versions follow semver"), with the notes and the host commit in the tag's
+# message, and build it with release.yml in this same run, since a
 # tag made with GITHUB_TOKEN starts no workflow of its own.
 #
 # Modes. `release` only for the schedule, or a manual run with mode=release, on

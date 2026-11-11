@@ -9,6 +9,11 @@
  * `--from vX.Y.Z` plans from an older release instead of the latest (dry runs
  * only: the version it names is then not the real next one).
  *
+ * The version follows semver from the LARGEST kind among the notes (each PR's
+ * `Kind:` line; a note merged before kinds counts as a fix): while 0.x, a
+ * breaking change is the next minor and anything else the next patch; from
+ * 1.0, breaking → major, feature → minor, fix → patch (`bump` in lib.ts).
+ *
  * Writes `notes/<version>.md` into --notes-dir (default: a temp dir) when there
  * is something to release, prints a summary, and, under GitHub Actions, sets
  * the step outputs `release`, `reason`, `version`, `tag`, `host_sha` and
@@ -20,7 +25,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { baseline, collectNotes, type MergedPr, prsInRange, type ReleaseInfo, renderNotes } from './lib'
+import { baseline, collectNotes, largestChange, type MergedPr, nextVersion, prsInRange, type ReleaseInfo, renderNotes, versionText } from './lib'
 
 const ROOT = join(import.meta.dir, '..', '..')
 const DESKTOP = process.env.DESKTOP_REPO || process.env.GITHUB_REPOSITORY || 'Jalez/kehikko-desktop'
@@ -118,22 +123,25 @@ async function main() {
     ...(desktop.commits.size ? prsInRange(await mergedPrs(DESKTOP, desktop.since), desktop.commits) : []),
   ]
   const collected = collectNotes(prs)
-  const tag = `v${base.next}`
+  const next = nextVersion(base.version, collected)
+  const version = next ? versionText(next) : ''
+  const tag = `v${version}`
+  const change = largestChange(collected.notes.map((one) => one.change))
   const say = (pr: MergedPr) => `${pr.repo}#${pr.number} ${pr.title}`
 
   const report = [
-    `## Next app release: ${collected.notes.length ? tag : 'none'}`,
+    `## Next app release: ${next ? `${tag} (${change}, the largest kind)` : 'none'}`,
     '',
     `- Latest release: ${base.tag}, built from ${HOST}@${base.hostSha.slice(0, 7)}`,
     `- Host now: ${HOST}@${hostSha.slice(0, 7)} (${hostRef}), ${host.commits.size} commit(s) ahead`,
     `- App now: ${DESKTOP}@${desktopSha.slice(0, 7)}, ${desktop.commits.size} commit(s) since ${base.tag}`,
     `- Merged pull requests: ${prs.length} (${collected.notes.length} with a note, ${collected.none.length} \`none\`, ${collected.missing.length} without a Release note section)`,
-    ...collected.notes.map(({ pr, lines: said }) => `  - note: ${say(pr)}: ${said.join(' / ')}`),
+    ...collected.notes.map(({ pr, change: kind, declared, lines: said }) => `  - ${kind}${declared ? '' : ' (no Kind line, counted as a fix)'}: ${say(pr)}: ${said.join(' / ')}`),
     ...collected.none.map((pr) => `  - none: ${say(pr)}`),
     ...collected.missing.map((pr) => `  - no section (skipped): ${say(pr)}`),
   ]
 
-  if (!collected.notes.length) {
+  if (!next) {
     const reason = prs.length ? `None of the ${prs.length} merged pull request(s) has a release note.` : `Nothing merged since ${base.tag}.`
     summary([...report, '', reason].join('\n'))
     output({ release: 'false', reason, host_sha: hostSha })
@@ -143,10 +151,10 @@ async function main() {
   const notes = renderNotes(collected)
   const dir = arg('notes-dir') || mkdtempSync(join(tmpdir(), 'kehikot-notes-'))
   mkdirSync(dir, { recursive: true })
-  const file = join(dir, `${base.next}.md`)
+  const file = join(dir, `${version}.md`)
   writeFileSync(file, notes)
-  summary([...report, '', `### notes/${base.next}.md`, '', '```markdown', notes.trimEnd(), '```'].join('\n'))
-  output({ release: 'true', reason: `${collected.notes.length} merged pull request(s) with a release note.`, version: base.next, tag, host_sha: hostSha, notes_file: file })
+  summary([...report, '', `### notes/${version}.md`, '', '```markdown', notes.trimEnd(), '```'].join('\n'))
+  output({ release: 'true', reason: `${collected.notes.length} merged pull request(s) with a release note; the largest kind is ${change}.`, version, tag, host_sha: hostSha, notes_file: file })
 }
 
 await main()
