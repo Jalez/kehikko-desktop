@@ -284,6 +284,8 @@ jobs:
   publish:
     needs: [draft, build]
     runs-on: ubuntu-latest
+    env:
+      HAS_HOST_TOKEN: ${{ secrets.HOST_TAG_TOKEN != '' }}
     steps:
       - name: Publish the release
         env:
@@ -315,3 +317,26 @@ jobs:
           gh api repos/Jalez/kehikko/git/refs -f ref="refs/tags/app-$TAG" -f sha="$obj" >/dev/null
           echo "Tagged Jalez/kehikko@$HOST_SHA as app-$TAG"
 
+
+      # The same release on Jalez/kehikko, so its Releases page lists every app
+      # version: tag vX.Y.Z on the host commit, the same "What's new", a link to
+      # the download here, no binaries. Same HOST_TAG_TOKEN (Contents: write on
+      # Jalez/kehikko). Idempotent (dev/release/mirror.ts); a failure here never
+      # unpublishes the app release, and `release.yml` can be re-run on the tag.
+      - uses: actions/checkout@v4
+        if: ${{ env.HAS_HOST_TOKEN == 'true' }}
+        with:
+          ref: ${{ needs.draft.outputs.tag }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ env.HAS_HOST_TOKEN == 'true' }}
+        with:
+          bun-version: 1.4.4
+      - name: Release the same version on the host repository
+        if: ${{ env.HAS_HOST_TOKEN == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.HOST_TAG_TOKEN }}
+          GH_APP_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: bun dev/release/mirror-release.ts "$TAG"
