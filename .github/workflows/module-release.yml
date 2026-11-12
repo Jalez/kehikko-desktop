@@ -29,6 +29,9 @@
 #     release:
 #       uses: Jalez/kehikko-desktop/.github/workflows/module-release.yml@main
 #
+# Before anything is published the release installs, typechecks, tests and
+# builds (the build is skipped when the module has no build script).
+#
 # Release order: before tagging, the pinned kehikot-module-protocol must not be
 # newer than the protocol of the newest published Kehikot app release
 # (.github/actions/protocol-order); the run is refused with what to do, and
@@ -54,6 +57,10 @@ on:
         description: The runner. Modules run on Macs, so their tests run on one.
         type: string
         default: macos-latest
+      env:
+        description: Extra environment for the typecheck, test and build steps, one NAME=value per line.
+        type: string
+        default: ""
       bun-version:
         type: string
         default: latest
@@ -245,6 +252,16 @@ jobs:
         with:
           bun-version: ${{ inputs.bun-version }}
 
+      # Extra environment for the steps below, as in module-ci.
+      - name: Set the extra environment
+        if: inputs.env != ''
+        env:
+          EXTRA_ENV: ${{ inputs.env }}
+        run: |
+          while IFS= read -r line; do
+            [ -n "$line" ] && printf '%s\n' "$line" >> "$GITHUB_ENV"
+          done <<<"$EXTRA_ENV"
+
       # Modules depend on the public protocol through git+ssh URLs; a runner has
       # no SSH key, so fetch GitHub over https.
       - name: Fetch GitHub dependencies over https
@@ -282,6 +299,18 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      # A module whose page does not build is never released: this runs before
+      # anything is published. Same tolerance as module-ci: no build script, no
+      # build.
+      - name: Build
+        shell: bash
+        run: |
+          if jq -e '.scripts.build' package.json >/dev/null 2>&1; then
+            bun run build
+          else
+            echo "No build script; skipped."
+          fi
 
       - name: Publish the release
         env:

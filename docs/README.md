@@ -582,7 +582,8 @@ nothing.
   must be exactly the one the table gives — a `breaking` with only a patch
   bump fails, and so does a `fix` with a minor one. The error names the version
   to use. No module repository needs a change for this; they call
-  `module-ci.yml@main`.
+  `module-ci.yml@main`. The release workflow also runs `bun run build` (when the
+  module has the script) after the tests and before it tags or publishes.
 - **The protocol.** The same action in its `ci.yml`, with
   `changelog: CHANGELOG.md`: the `Kind:` line is the first line of the
   `## X.Y.Z` entry.
