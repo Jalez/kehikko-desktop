@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged by Tauri into the app's Info.plist (it reads an Info.plist beside tauri.conf.json).
+
+  The host gives each module's frame a name of its own, <label>.kehikot.localhost:<port>,
+  served over plain http on loopback. App Transport Security exempts IP addresses and plain
+  "localhost", not names under it: without this exception the webview refuses every request to
+  *.kehikot.localhost ("Load failed"), the page's address check fails, and every frame falls
+  back to its module's raw port. Only that one loopback name, and its subdomains.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>kehikot.localhost</key>
+      <dict>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+      </dict>
+    </dict>
+  </dict>
+</dict>
+</plist>
