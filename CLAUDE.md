@@ -186,8 +186,9 @@ workflow_call`); a module's own `.github/workflows/release.yml` only calls it at
   releasing it.
 - The `release` job refuses a tag that does not match the module's
   `package.json`, is lightweight or is not on `main`, runs the same notes gate as
-  above on the module's `notes/<version>.md`, installs, typechecks and tests,
-  then publishes the release `<Module name> X.Y.Z` with the body
+  above on the module's `notes/<version>.md`, installs, typechecks, tests and
+  builds (`bun run build` when the module has the script, as in `module-ci.yml`;
+  a module whose page does not build is never released), then publishes the release `<Module name> X.Y.Z` with the body
   `### What's new`, the bullets, one line on which Kehikot it works with, and
   `<sub>Built from <sha7></sub>`. That line ("Works with Kehikot 0.1.39 and
   later.") is the module's protocol pin against the `app-v*` tags of
