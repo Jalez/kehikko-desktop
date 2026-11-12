@@ -179,6 +179,10 @@ jobs:
           - target: x86_64-apple-darwin
             bun_target: bun-darwin-x64
     runs-on: macos-latest
+    # A backstop over the bounded notarization below (each file: at most three
+    # submissions waited for twelve minutes each, dev/release/notarize.ts). A normal build
+    # takes 5 to 15 minutes; no step may hold the release for hours.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -243,6 +247,18 @@ jobs:
             { echo "::error::Could not stamp $version into the version files."; exit 1; }
           echo "Building Kehikot $version"
 
+      # Apple sometimes leaves a submission "In Progress" for over an hour.
+      # Tauri notarizes the app with `notarytool submit --wait`, which waits with
+      # no limit; dev/release/bin/xcrun, first on PATH, hands that one call to
+      # dev/release/notarize-run.ts, which polls with a deadline, resubmits, and
+      # fails with the submission ids. NOTARIZE_RECORD collects one line per file
+      # for the failure issue (auto-release.yml); NOTARIZE_LOG the progress.
+      - name: Bound Apple's notarization waits
+        run: |
+          echo "$GITHUB_WORKSPACE/dev/release/bin" >> "$GITHUB_PATH"
+          echo "NOTARIZE_RECORD=$RUNNER_TEMP/notarization.txt" >> "$GITHUB_ENV"
+          echo "NOTARIZE_LOG=$RUNNER_TEMP/notarization.log" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -273,11 +289,29 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           dmg="$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)"
-          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" --wait --timeout 2h
-          xcrun stapler staple "$dmg"
+          bun dev/release/notarize-run.ts --staple "$dmg"
           spctl --assess --type open --context context:primary-signature -v "$dmg"
           gh release upload "$TAG" "$dmg" --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Show the notarization record
+        if: always()
+        run: |
+          for f in "$NOTARIZE_LOG" "$NOTARIZE_RECORD"; do
+            [ -n "$f" ] && [ -f "$f" ] && cat "$f"
+          done
+          if [ -n "$NOTARIZE_RECORD" ] && [ -f "$NOTARIZE_RECORD" ]; then
+            { echo '### Notarization (${{ matrix.target }})'; echo; sed 's/^/- /' "$NOTARIZE_RECORD"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          true
+
+      - name: Keep the notarization record for the failure issue
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notarization-${{ matrix.target }}
+          path: ${{ runner.temp }}/notarization.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Published only when both architectures are in, so latest.json never points
   # an Intel Mac at a release that has no Intel build.

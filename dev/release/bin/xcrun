@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Put first on PATH by release.yml for Tauri's build. Tauri notarizes the app
+# with `xcrun notarytool submit <zip> --output-format json --wait <credentials>`,
+# which waits for Apple with no limit; that one call goes to notarize-run.ts,
+# which waits with bounded attempts and answers the same JSON. Every other
+# xcrun call goes to the real one unchanged.
+if [ "${1:-}" = notarytool ] && [ "${2:-}" = submit ]; then
+  for a in "$@"; do
+    if [ "$a" = --wait ]; then
+      shift 2
+      exec bun "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/notarize-run.ts" --tauri "$@"
+    fi
+  done
+fi
+exec /usr/bin/xcrun "$@"
