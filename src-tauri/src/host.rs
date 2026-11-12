@@ -317,6 +317,11 @@ mod port_tests {
 /// offers a restart nothing would carry out.
 pub const RESTART_VAR: &str = "KEHIKKO_RESTART_FILE";
 
+/// The variable that tells the host which app it runs in, so the host's own
+/// log (`host.log`) says it on its start line. The version is the tag's,
+/// stamped into `Cargo.toml` at release (`release.yml`).
+pub const APP_VERSION_VAR: &str = "KEHIKKO_APP_VERSION";
+
 pub fn restart_file() -> PathBuf {
     home()
         .join(".config")
@@ -484,6 +489,7 @@ pub fn start(dir: &Path, script: &Path, api_port: u16) -> std::io::Result<Child>
         .env("PATH", launch_path())
         .env(ORIGIN_VAR, origin_value(api_port + 1))
         .env(RESTART_VAR, restart_file())
+        .env(APP_VERSION_VAR, env!("CARGO_PKG_VERSION"))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -511,6 +517,7 @@ pub fn start_sidecar(binary: &Path, port: u16) -> std::io::Result<Child> {
         .env("PATH", launch_path())
         .env(ORIGIN_VAR, origin_value(port))
         .env(RESTART_VAR, restart_file())
+        .env(APP_VERSION_VAR, env!("CARGO_PKG_VERSION"))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
