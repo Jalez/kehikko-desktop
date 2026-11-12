@@ -59,6 +59,16 @@ Nobody bumps the version, writes the notes file or tags by hand.
   waits while a hand-started `release.yml` run is building). A failure opens or
   comments on ONE issue, "Automatic app release failed"; while it is open the
   hourly run does nothing. Fix, then close it.
+- Notarization waits are bounded (`dev/release/notarize.ts`, run by
+  `notarize-run.ts`, tested by `notarize.test.ts`): the disk image directly, and
+  Tauri's own `notarytool submit --wait` for the app through
+  `dev/release/bin/xcrun`, put first on PATH for the build. Per file: up to 3
+  submissions, each uploaded with retries (5 min per try) and polled with
+  backoff for 12 min, all earlier ones still polled; "Invalid"/"Rejected" fails
+  at once with `notarytool log`. Each file's outcome (submission ids, last
+  status) goes into the failure issue. The build jobs have `timeout-minutes: 90`.
+  Never go back to an unbounded `--wait`: Apple has left a submission "In
+  Progress" for over an hour.
 - A failed build leaves the tag and a draft. Re-run `release.yml` by hand on the
   tag (notes and host commit come from the tag message), or delete both; the
   next plan refuses to start past a stuck draft.

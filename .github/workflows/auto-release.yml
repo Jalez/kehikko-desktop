@@ -230,6 +230,15 @@ jobs:
     permissions:
       issues: write
     steps:
+      # release.yml's builds leave one line per notarized file (submission ids
+      # and Apple's last status), so the issue can say where it stopped.
+      - name: Read the notarization record
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: notarization-*
+          path: ${{ runner.temp }}/notarization
+
       - name: Open or update the issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -247,6 +256,18 @@ jobs:
             what="Tagging $TAG failed. If the tag ruleset refused it, GitHub Actions needs to be a bypass actor on \"release tags are the owner's\" (CLAUDE.md, \"Releases are automatic\")."
           else
             what="Building $TAG failed; the tag and a draft release exist. Re-run release.yml on the tag (Actions, release, Run workflow, pick the tag), or delete the draft release and the tag."
+          fi
+          record="$(cat "$RUNNER_TEMP"/notarization/*/notarization.txt 2>/dev/null || true)"
+          if printf '%s' "$record" | grep -q 'NOT notarized'; then
+            what="Notarization failed: Apple did not accept a file of $TAG within the bounded attempts (dev/release/notarize.ts). \"In Progress\" means Apple was slow: re-run release.yml on the tag later. \"Invalid\" or \"Rejected\": the run's log has notarytool's log.
+
+          $what"
+          fi
+          if [ -n "$record" ]; then
+            what="$what
+
+          Notarization:
+          $(printf '%s\n' "$record" | sed 's/^/- /')"
           fi
           body="$(printf '%s\n\nRun: %s\n\nWhile this issue is open the hourly automatic release does nothing. Fix the cause, then close this issue; the next run tries again.' "$what" "$run")"
           issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
