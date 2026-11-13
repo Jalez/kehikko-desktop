@@ -2,7 +2,8 @@
 # repository calls from its own .github/workflows/ci.yml. On a pull request it
 # first checks that a version bump matches the kind of change notes/<version>.md
 # declares (semver; .github/actions/version-kind). Then it installs, typechecks,
-# tests and builds, skipping whatever the module does not have.
+# tests, holds an agent module to the shared conformance (kehikot-check-agent,
+# protocol 2.95.0) and builds, skipping whatever the module does not have.
 #
 # The caller, in the module repository:
 #
@@ -109,6 +110,25 @@ jobs:
 
       - name: Test
         run: bun test
+
+      # An agent module — one whose manifest asks for agents:message — is built so
+      # every conversation can message, however it started (protocol 2.95.0):
+      # it provides agent.delivery, lists every tool to a caller with no place
+      # token, and has a test that runs the shared conformance
+      # (kehikot-module-protocol/testing), which `bun test` above ran.
+      # A module on an older protocol is warned, not failed, until the agent
+      # modules have moved.
+      - name: Agent modules meet the conformance
+        shell: bash
+        run: |
+          check=node_modules/kehikot-module-protocol/bin/check-agent.ts
+          if [ -f "$check" ]; then
+            bun "$check" .
+          elif grep -rqs "agents:message" manifest.ts manifest.js manifest.mjs; then
+            echo "::warning::This module messages (agents:message) and its protocol is older than 2.95.0, so the agent conformance check cannot run. Pin kehikot-module-protocol 2.95.0 or newer and add the conformance test."
+          else
+            echo "Not an agent module, or a protocol older than the check; skipped."
+          fi
 
       - name: Build
         shell: bash
