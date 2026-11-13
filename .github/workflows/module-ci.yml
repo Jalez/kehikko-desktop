@@ -110,6 +110,25 @@ jobs:
       - name: Test
         run: bun test
 
+      # An agent module's door config names only the starting host's stable
+      # door (protocol 2.95.0): every session door at `<host>/m/<id>/mcp` on the
+      # host that started the module, never a module's raw port, which changes
+      # on the next restart and leaves the session reconnecting to nothing.
+      # `kehikot-check-door-config` comes with the module's own protocol; a
+      # module whose protocol predates it is warned, not failed, and a module
+      # that writes no agent door config passes.
+      - name: Door config names only the starting host's stable door
+        shell: bash
+        run: |
+          check=node_modules/kehikot-module-protocol/bin/check-door-config.ts
+          if [ -f "$check" ]; then
+            bun "$check" .
+          elif grep -rqsE --include='*.ts' --exclude-dir=node_modules --exclude-dir=test 'mcpServers|mcp_servers|--mcp-config' .; then
+            echo "::warning::This module writes an agent door config, and its protocol is older than 2.95.0: pin kehikot-module-protocol to v2.95.0 or newer so the door config check runs."
+          else
+            echo "Writes no agent door config; nothing to check."
+          fi
+
       - name: Build
         shell: bash
         run: |
