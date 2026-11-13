@@ -10,11 +10,12 @@
 //
 // Progress goes to stderr and, when NOTARIZE_LOG is set, to that file (Tauri
 // keeps the stderr of a call that succeeds to itself). The one-line outcome is
-// appended to NOTARIZE_RECORD when it is set; release.yml uploads that file so a
+// appended to NOTARIZE_RECORD when it is set; a refusal no retry can fix is also
+// an ::error:: annotation and a block in the job summary; release.yml uploads that file so a
 // failed release's issue can name the submissions.
 import { appendFileSync } from 'node:fs'
 
-import { DEFAULTS, envAuth, notarize, realClock, realRun, staple, tauriArgs } from './notarize'
+import { DEFAULTS, envAuth, notarize, realClock, realRun, type Refusal, staple, tauriArgs } from './notarize'
 
 const argv = process.argv.slice(2)
 const tauri = argv[0] === '--tauri'
@@ -45,10 +46,17 @@ if (tauri) {
   auth = env
 }
 
+/** Says what to do where a person looks: the log annotation and the job summary. */
+function announce(refusal: Refusal) {
+  console.error(`::error title=Apple refused the notarization::${refusal.why}. ${refusal.action}`)
+  append(process.env.GITHUB_STEP_SUMMARY, `### Notarization refused\n\n${refusal.why}.\n\n**What to do:** ${refusal.action}\n`)
+}
+
 const outcome = await notarize({ ...DEFAULTS, file, auth, log }, realRun, realClock)
 append(process.env.NOTARIZE_RECORD, outcome.summary)
 
 if (!outcome.ok) {
+  if (outcome.reason === 'refused') announce(outcome.refusal)
   if (outcome.log) console.error(`notarytool log:\n${outcome.log}`)
   console.error(outcome.summary)
   process.exit(1)

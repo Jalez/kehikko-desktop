@@ -258,7 +258,12 @@ jobs:
             what="Building $TAG failed; the tag and a draft release exist. Re-run release.yml on the tag (Actions, release, Run workflow, pick the tag), or delete the draft release and the tag."
           fi
           record="$(cat "$RUNNER_TEMP"/notarization/*/notarization.txt 2>/dev/null || true)"
-          if printf '%s' "$record" | grep -q 'NOT notarized'; then
+          action="$(printf '%s\n' "$record" | grep -o 'Apple refused: .*' | head -n1 || true)"
+          if [ -n "$action" ]; then
+            what="Notarization was refused by Apple, and retrying cannot help ($TAG). ${action}
+
+          $what"
+          elif printf '%s' "$record" | grep -q 'NOT notarized'; then
             what="Notarization failed: Apple did not accept a file of $TAG within the bounded attempts (dev/release/notarize.ts). \"In Progress\" means Apple was slow: re-run release.yml on the tag later. \"Invalid\" or \"Rejected\": the run's log has notarytool's log.
 
           $what"
