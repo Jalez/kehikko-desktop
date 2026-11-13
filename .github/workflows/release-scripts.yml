@@ -1,0 +1,29 @@
+# The tests of dev/release, which decide versions and notes. Read-only.
+#
+# On EVERY pull request, never filtered by path and never skipped: release
+# tooling merged untested once because a description edit re-ran `checks` with
+# this job skipped, and the skipped check-run counted. Editing a description
+# does not trigger this workflow, so there is no skipped run to count.
+name: release-scripts
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  release-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Test
+        run: bun test dev/release

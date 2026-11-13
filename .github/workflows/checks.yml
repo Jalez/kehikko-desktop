@@ -3,7 +3,9 @@
 # release-note: the description's "## Release note" section, the line the app's
 # release page will carry (or `none`); the same check the host runs, with the
 # host's module-agnostic list from its main. Editing the description re-runs it.
-# release-scripts: the tests of dev/release, which decide versions and notes.
+# release-scripts is its own workflow (release-scripts.yml): this one also runs
+# when a description is edited, and a job skipped on that event left a SKIPPED
+# release-scripts check-run beside the real one.
 name: checks
 
 on:
@@ -35,18 +37,3 @@ jobs:
         with:
           body: ${{ github.event.pull_request.body }}
           host-dir: host
-
-  release-scripts:
-    if: github.event.action != 'edited'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
-
-      - name: Test
-        run: bun test dev/release
