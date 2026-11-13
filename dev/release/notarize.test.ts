@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { type Clock, DEFAULTS, envAuth, notarize, type Options, type RunResult, staple, tauriArgs } from './notarize'
+import { AGREEMENT_ACTION, classify, type Clock, DEFAULTS, envAuth, notarize, refusalSummary, type Options, type RunResult, staple, tauriArgs } from './notarize'
 
 const MIN = 60_000
 const AUTH = ['--apple-id', 'someone', '--password', 'SECRET-PW', '--team-id', 'TEAM']
@@ -273,5 +273,88 @@ esac
     expect(text).toContain('K.zip: Accepted, submission sub-9')
     expect(text).toContain('K.dmg: NOT notarized, Apple answered Invalid for submission sub-9')
     expect(text).not.toContain('SECRET-PW')
+  })
+})
+
+const AGREEMENT = 'Error: HTTP status code: 403. A required agreement is missing or has expired. This request requires an in-effect agreement that has not been signed or has expired.'
+const fail = (stderr: string): RunResult => ({ code: 1, stdout: '', stderr, timedOut: false })
+
+describe('classify', () => {
+  test('the agreement error of release v0.7.12 is permanent and names the action', () => {
+    const f = classify(fail(AGREEMENT))
+    expect(f?.kind).toBe('agreement')
+    expect(f?.action).toBe(AGREEMENT_ACTION)
+    expect(f?.action).toContain('https://developer.apple.com/account')
+    expect(f?.action).toContain('re-run release.yml on the tag')
+  })
+  test('401 and bad credentials are permanent', () => {
+    expect(classify(fail('Error: HTTP status code: 401. Invalid credentials. Username or password is incorrect.'))?.kind).toBe('credentials')
+    expect(classify(fail('Error: Unable to authenticate. Check the app-specific password.'))?.kind).toBe('credentials')
+  })
+  test('a revoked certificate is permanent', () => {
+    expect(classify(fail('The signing certificate has been revoked'))?.kind).toBe('certificate')
+  })
+  test('another 403 is permanent too', () => {
+    expect(classify(fail('Error: HTTP status code: 403. Forbidden'))?.kind).toBe('forbidden')
+  })
+  test('5xx, network, timeouts and the unknown are transient', () => {
+    expect(classify(fail('Error: HTTP status code: 500'))).toBeNull()
+    expect(classify(fail('Error: HTTP status code: 503. Service Unavailable'))).toBeNull()
+    expect(classify(fail('Error: The Internet connection appears to be offline. (NSURLErrorDomain -1009)'))).toBeNull()
+    expect(classify(fail('Error: The request timed out.'))).toBeNull()
+    expect(classify(fail('offline'))).toBeNull()
+    expect(classify({ stdout: '', stderr: AGREEMENT, timedOut: true })).toBeNull()
+  })
+})
+
+describe('notarize refusals', () => {
+  test('an agreement error on upload stops at once: one try, no waiting', async () => {
+    const lines: string[] = []
+    const apple = fakeApple({ uploads: Array(9).fill(fail(AGREEMENT)), statuses: {} })
+    const r = await notarize(options(lines), apple.run, apple.clock)
+    expect(r.ok).toBe(false)
+    if (r.ok || r.reason !== 'refused') throw new Error('expected a refusal')
+    expect(apple.calls.filter(c => c.args[1] === 'submit')).toHaveLength(1)
+    expect(apple.now()).toBe(0)
+    expect(r.refusal.kind).toBe('agreement')
+    expect(r.summary).toContain('NOT notarized, Apple refused')
+    expect(r.summary).toContain(AGREEMENT_ACTION)
+  })
+  test('bad credentials on a status read stop at once', async () => {
+    const lines: string[] = []
+    const apple = fakeApple({ uploads: ['sub-1'], statuses: {} })
+    const run = async (args: string[], t: number) => args[1] === 'info' ? fail('Error: HTTP status code: 401. Invalid credentials') : apple.run(args, t)
+    const r = await notarize(options(lines), run, apple.clock)
+    if (r.ok || r.reason !== 'refused') throw new Error('expected a refusal')
+    expect(r.refusal.kind).toBe('credentials')
+    expect(r.submissions).toHaveLength(1)
+  })
+  test('transient upload errors are still retried, 3 submissions of 3 tries', async () => {
+    const lines: string[] = []
+    const apple = fakeApple({ uploads: Array(9).fill(fail('Error: HTTP status code: 503')), statuses: {} })
+    const r = await notarize(options(lines), apple.run, apple.clock)
+    if (r.ok) throw new Error('expected failure')
+    expect(r.reason).toBe('upload')
+    expect(apple.calls.filter(c => c.args[1] === 'submit')).toHaveLength(9)
+  })
+  test('a transient error then success is retried into success', async () => {
+    const lines: string[] = []
+    const apple = fakeApple({ uploads: [fail('Error: The Internet connection appears to be offline.'), 'sub-1'], statuses: { 'sub-1': ['Accepted'] } })
+    const r = await notarize(options(lines), apple.run, apple.clock)
+    expect(r.ok).toBe(true)
+  })
+})
+
+describe('the failure issue', () => {
+  test('auto-release.yml pulls the reason and the action out of the record', async () => {
+    const workflow = await Bun.file(new URL('../../.github/workflows/auto-release.yml', import.meta.url)).text()
+    const pattern = workflow.match(/grep -o '([^']*)'/)?.[1]
+    expect(pattern).toBe('Apple refused: .*')
+    const line = refusalSummary('Kehikot.dmg', classify(fail(AGREEMENT))!)
+    const proc = Bun.spawnSync(['grep', '-o', pattern!], { stdin: new TextEncoder().encode(`${line}\n`) })
+    const said = proc.stdout.toString()
+    expect(said).toContain('a required agreement is missing or has expired')
+    expect(said).toContain(AGREEMENT_ACTION)
+    expect(workflow).toContain('retrying cannot help')
   })
 })
