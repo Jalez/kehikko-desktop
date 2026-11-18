@@ -58,7 +58,10 @@ Nobody bumps the version, writes the notes file or tags by hand.
   `main`). One release at a time (concurrency `kehikot-app-release`; a plan
   waits while a hand-started `release.yml` run is building). A failure opens or
   comments on ONE issue, "Automatic app release failed"; while it is open the
-  hourly run does nothing. Fix, then close it.
+  hourly run does nothing. Fix, then close it. A re-run of `release.yml` that
+  publishes the tag closes that tag's issue itself, and the plan closes any open
+  one whose tag is already published and goes on (`dev/release/failed-issue.ts`,
+  tested by `failed-issue.test.ts`); the issue carries a `Tag:` line for this.
 - Notarization waits are bounded (`dev/release/notarize.ts`, run by
   `notarize-run.ts`, tested by `notarize.test.ts`): the disk image directly, and
   Tauri's own `notarytool submit --wait` for the app through

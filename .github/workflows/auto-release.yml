@@ -21,7 +21,9 @@
 #
 # Failures. A failed release opens (or comments on) ONE issue, "Automatic app
 # release failed", and while it is open the scheduled runs do nothing. Fix what
-# it says, then close it; the next hourly run tries again.
+# it says, then close it; the next hourly run tries again. An issue whose tag
+# was published afterwards (release.yml re-run by hand) is closed by release.yml
+# itself, and by the next plan if that was missed (dev/release/failed-issue.ts).
 name: auto-release
 
 on:
@@ -78,7 +80,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      issues: read
+      issues: write
       pull-requests: read
     outputs:
       release: ${{ steps.plan.outputs.release == 'true' && steps.blocked.outputs.issue == '' }}
@@ -100,16 +102,12 @@ jobs:
           bun-version: 1.4.4
 
       # A failed release waits for a person: no retry while its issue is open.
+      # Unless its tag is already published (the build was re-run and passed):
+      # then the issue is stale, and it is closed here, with a log line.
       - name: Is a failed release waiting
         id: blocked
         if: env.MODE == 'release'
-        run: |
-          issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Automatic app release failed"' \
-            --json number,title --jq '[.[] | select(.title == "Automatic app release failed")][0].number // empty')"
-          if [ -n "$issue" ]; then
-            echo "::notice::Issue #$issue is open: an earlier automatic release failed. Fix it and close the issue; until then nothing is released."
-          fi
-          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+        run: bun dev/release/failed-issue.ts heal
 
       - name: Plan the release
         id: plan
@@ -206,6 +204,7 @@ jobs:
     needs: [plan, tag]
     permissions:
       contents: write
+      issues: write
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.plan.outputs.tag }}
@@ -269,7 +268,7 @@ jobs:
           Notarization:
           $(printf '%s\n' "$record" | sed 's/^/- /')"
           fi
-          body="$(printf '%s\n\nRun: %s\n\nWhile this issue is open the hourly automatic release does nothing. Fix the cause, then close this issue; the next run tries again.' "$what" "$run")"
+          body="$(printf '%s\n\n%s\n\nRun: %s\n\nWhile this issue is open the hourly automatic release does nothing. Fix the cause, then close this issue; the next run tries again.' "$what" "${TAG:+Tag: $TAG}" "$run")"
           issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
             --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")"
           if [ -n "$issue" ]; then

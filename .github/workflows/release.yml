@@ -318,6 +318,9 @@ jobs:
   publish:
     needs: [draft, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
     env:
       HAS_HOST_TOKEN: ${{ secrets.HOST_TAG_TOKEN != '' }}
     steps:
@@ -326,6 +329,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.draft.outputs.tag }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+      # A build that failed and was re-run on this tag left "Automatic app
+      # release failed" open, which stops every later automatic release. This
+      # tag is published now: close that issue (dev/release/failed-issue.ts). Never
+      # unpublishes anything; auto-release's plan closes a missed one too.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.draft.outputs.tag }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Close the failure issue of this tag
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: bun dev/release/failed-issue.ts close-for "$TAG"
 
       # Mark the host commit this release bundled as app-<tag> in Jalez/kehikko, so
       # its Tags page lists every app version. GITHUB_TOKEN cannot write to
@@ -357,15 +378,6 @@ jobs:
       # the download here, no binaries. Same HOST_TAG_TOKEN (Contents: write on
       # Jalez/kehikko). Idempotent (dev/release/mirror.ts); a failure here never
       # unpublishes the app release, and `release.yml` can be re-run on the tag.
-      - uses: actions/checkout@v4
-        if: ${{ env.HAS_HOST_TOKEN == 'true' }}
-        with:
-          ref: ${{ needs.draft.outputs.tag }}
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-        if: ${{ env.HAS_HOST_TOKEN == 'true' }}
-        with:
-          bun-version: 1.4.4
       - name: Release the same version on the host repository
         if: ${{ env.HAS_HOST_TOKEN == 'true' }}
         continue-on-error: true
