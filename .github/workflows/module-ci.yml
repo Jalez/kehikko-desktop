@@ -107,6 +107,29 @@ jobs:
             echo "No typecheck script and no tsconfig.json; skipped."
           fi
 
+      # A module's tests start through the protocol's shared preload
+      # (`import 'kehikot-module-protocol/testing/setup'` in a file bunfig.toml
+      # preloads), so no test can reach the running app through the KEHIKOT_*
+      # variables a session leaks (it once did, at :4170). A new module that
+      # forgets it fails here instead of in somebody's app. A module with no
+      # tests has nothing to check.
+      - name: Tests use the shared test preload
+        shell: bash
+        run: |
+          if [ -z "$(find . -path ./node_modules -prune -o \( -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.test.js' \) -print -quit)" ]; then
+            echo "No tests; nothing to check."
+            exit 0
+          fi
+          files=$(sed -n '/^\[test\]/,/^\[/p' bunfig.toml 2>/dev/null | grep -E '^[[:space:]]*preload' | grep -oE '"[^"]+"' | tr -d '"')
+          for file in $files; do
+            if [ -f "$file" ] && grep -qE "kehikot-module-protocol/testing/setup" "$file"; then
+              echo "$file imports the shared test preload."
+              exit 0
+            fi
+          done
+          echo "::error::This module's tests do not start through the shared preload. Add \`import 'kehikot-module-protocol/testing/setup'\` as the first line of a file bunfig.toml preloads under [test] (pin kehikot-module-protocol v2.104.0 or newer). It drops the running app's KEHIKOT_* environment so no test reaches the person's app."
+          exit 1
+
       - name: Test
         run: bun test
 
