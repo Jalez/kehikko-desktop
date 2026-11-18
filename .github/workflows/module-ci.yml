@@ -152,6 +152,23 @@ jobs:
             echo "Writes no agent door config; nothing to check."
           fi
 
+      # A page asks its own server through `ask`, `follow` or `subscribe`
+      # (protocol 2.106.0 resolves `./api/...` against the module's origin
+      # root). A raw `fetch('./api/...')` or `new EventSource('./api/...')`
+      # resolves against the path the host frames the page at, and silently
+      # reaches nothing at `/app/` or `/app/?...`. `kehikot-check-addresses`
+      # comes with the module's own protocol; a module whose protocol predates
+      # it has nothing to run yet.
+      - name: No raw relative address to the module's own server
+        shell: bash
+        run: |
+          check=node_modules/kehikot-module-protocol/bin/check-addresses.ts
+          if [ -f "$check" ]; then
+            bun "$check" .
+          else
+            echo "The module's protocol is older than 2.106.0; nothing to run."
+          fi
+
       - name: Build
         shell: bash
         run: |
