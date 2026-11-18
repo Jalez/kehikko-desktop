@@ -32,6 +32,17 @@
 # Before anything is published the release installs, typechecks, tests and
 # builds (the build is skipped when the module has no build script).
 #
+# Then it builds the module's ready-built bundle (`kehikot-bundle build`, from
+# the protocol the module pins: docs/bundles.md in kehikko-protocol), starts it
+# once in scratch folders (`kehikot-bundle smoke`: its manifest and its page
+# must answer) and attaches `<id>-<version>.tar.gz` and its `.sha256` to the
+# release. Kehikot installs and updates from that bundle: no node_modules, no
+# install and no build on the person's computer. A bundle that does not start
+# fails the release before anything is published. A module on a protocol older
+# than 2.102.0 (no `kehikot-bundle`), or one whose package.json says
+# `kehikot.bundle.enabled: false`, is released without a bundle and keeps the
+# git path; the run says so.
+#
 # Release order: before tagging, the pinned kehikot-module-protocol must not be
 # newer than the protocol of the newest published Kehikot app release
 # (.github/actions/protocol-order); the run is refused with what to do, and
@@ -312,6 +323,34 @@ jobs:
             echo "No build script; skipped."
           fi
 
+      # The ready-built bundle, from the module's own pinned protocol. Built
+      # here, after the tests and the build, from the clean tagged checkout,
+      # and started once: a bundle that does not answer its manifest and its
+      # page fails the release before it is published.
+      - name: Build the bundle
+        id: bundle
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/bundle"
+          if [ ! -e node_modules/kehikot-module-protocol/bin/bundle.ts ]; then
+            echo "::notice::The pinned kehikot-module-protocol has no kehikot-bundle (it arrived in 2.102.0), so this release has no bundle and Kehikot installs it from git. Pin v2.102.0 or later to publish bundles."
+            echo "archive=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bun node_modules/kehikot-module-protocol/bin/bundle.ts build . --out "$out" | tee "$RUNNER_TEMP/bundle.log"
+          archive="$(sed -n 's/^archive=//p' "$RUNNER_TEMP/bundle.log")"
+          if [ -z "$archive" ]; then
+            echo "::notice::No bundle for this release; the line above says why, and Kehikot installs it from git."
+          fi
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Start the bundle once
+        if: steps.bundle.outputs.archive != ''
+        shell: bash
+        env:
+          ARCHIVE: ${{ steps.bundle.outputs.archive }}
+        run: bun node_modules/kehikot-module-protocol/bin/bundle.ts smoke "$ARCHIVE"
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -321,6 +360,7 @@ jobs:
           NAME: ${{ steps.manifest.outputs.name }}
           WHATS_NEW: ${{ steps.notes.outputs.whats_new }}
           WORKS_WITH: ${{ steps.works.outputs.line }}
+          ARCHIVE: ${{ steps.bundle.outputs.archive }}
         run: |
           body="$RUNNER_TEMP/release-body.md"
           if [ -n "$WORKS_WITH" ]; then
@@ -329,11 +369,14 @@ jobs:
             printf "### What's new\n%s\n\n<sub>Built from %s</sub>\n" "$WHATS_NEW" "${COMMIT:0:7}" > "$body"
           fi
           title="$NAME $VERSION"
+          assets=()
+          if [ -n "$ARCHIVE" ]; then assets=("$ARCHIVE" "$ARCHIVE.sha256"); fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file "$body" \
               --draft=false --prerelease=false --latest
+            if [ ${#assets[@]} -gt 0 ]; then gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber; fi
           else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$title" \
+            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$title" \
               --notes-file "$body" --latest
           fi
           echo "Released $title: $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
