@@ -64,6 +64,15 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: Jalez/kehikko-desktop/.github/actions/version-kind@main
 
+      # The notes a new version brings pass the same gate the release holds
+      # them to (actions/notes-gate), so a note the release would refuse fails
+      # here, before the merge, not in the release after it.
+      - name: The release notes say what changed
+        if: github.event_name == 'pull_request'
+        uses: Jalez/kehikko-desktop/.github/actions/notes-gate@main
+        with:
+          only-new: "true"
+
       # Release order, as a warning only: the app may be released before this
       # pull request merges. The release itself refuses (module-release.yml).
       - name: The app already speaks the module's protocol

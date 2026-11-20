@@ -1,0 +1,50 @@
+# The release-notes gate (dev/release/notes-gate.sh), as one step every module
+# workflow uses: module-ci.yml on a pull request that bumps the version, and
+# module-release.yml before it cuts the release. One rule in one place, so a
+# note the release would refuse fails the pull request instead of the release
+# after the merge.
+#
+# Needs the repository checked out.
+name: Release notes say what changed
+description: Fail when notes/<version>.md is missing, has no bullets, or holds placeholder or generic text.
+
+inputs:
+  version:
+    description: The version whose notes to check; package.json's when empty.
+    default: ""
+  only-new:
+    description: "true: pass without checking when the version is already tagged (not a release), as on a pull request."
+    default: "false"
+
+outputs:
+  body:
+    description: The notes body (HTML comments, a leading What's new heading and the Kind line dropped).
+    value: ${{ steps.gate.outputs.body }}
+  checked:
+    description: "true when a notes file was checked."
+    value: ${{ steps.gate.outputs.checked }}
+
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        ONLY_NEW: ${{ inputs.only-new }}
+        GATE: ${{ github.action_path }}/../../../dev/release/notes-gate.sh
+      run: |
+        version="${VERSION:-$(jq -r .version package.json)}"
+        if [ "$ONLY_NEW" = true ] && git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+          echo "v$version is already released; no new notes to check."
+          echo "checked=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        body="$(bash "$GATE" "notes/$version.md" "$version")" || { printf '%s\n' "$body"; exit 1; }
+        body="$(printf '%s' "$body" | perl -0pe 's/\A\s+//; s/\s+\z//')"
+        {
+          echo "checked=true"
+          echo 'body<<KEHIKOT_NOTES_END'
+          printf '%s\n' "$body"
+          echo 'KEHIKOT_NOTES_END'
+        } >> "$GITHUB_OUTPUT"
