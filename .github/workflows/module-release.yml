@@ -105,6 +105,14 @@ jobs:
         with:
           mode: refuse
 
+      # The notes, before the tag: a tag made for notes the release then
+      # refuses points at the refused notes for good, and the fixed notes
+      # merged after it are "already tagged", not a release (Work Item 0.1.7).
+      - name: The release notes say what changed
+        uses: Jalez/kehikko-desktop/.github/actions/notes-gate@main
+        with:
+          only-new: "true"
+
       - id: tag
         uses: Jalez/kehikko-desktop/.github/actions/tag-on-merge@main
 
