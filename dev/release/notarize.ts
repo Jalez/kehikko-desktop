@@ -6,7 +6,10 @@
 // info` with backoff until the attempt's deadline, then once more at the
 // deadline. Still "In Progress": a new submission, up to `attempts` in all, and
 // the earlier ones keep being polled; whichever Apple accepts first wins.
-// "Invalid" or "Rejected": stop at once with `notarytool log`. Credentials are
+// "Invalid" or "Rejected": stop at once with `notarytool log`. An answer that no
+// retry can change (an agreement to accept, bad credentials, a revoked
+// certificate: `classify`) stops at once too, naming what to do; only network
+// trouble, 5xx and timeouts are retried. Credentials are
 // passed to notarytool as given and never printed.
 import { basename } from 'node:path'
 
@@ -53,6 +56,50 @@ export interface Submission { id: string; status: string; attempt: number }
 export type Outcome =
   | { ok: true; id: string; message: string; submissions: Submission[]; summary: string }
   | { ok: false; reason: 'invalid' | 'timeout' | 'upload'; submissions: Submission[]; summary: string; log?: string }
+  | { ok: false; reason: 'refused'; refusal: Refusal; submissions: Submission[]; summary: string }
+
+/** An answer from Apple that retrying cannot change, and what a person does about it. */
+export interface Refusal { kind: 'agreement' | 'credentials' | 'certificate' | 'forbidden'; why: string; action: string }
+
+export const AGREEMENT_ACTION = 'Apple needs the account holder to accept an updated agreement: sign in at https://developer.apple.com/account and accept it, then re-run release.yml on the tag.'
+
+/**
+ * Sorts a failed `notarytool` call: a Refusal when no retry can succeed until a
+ * person acts, null when it may pass by itself (network, 5xx, timeout, anything
+ * unrecognised). Unknown errors stay retryable so a new wording never fails a
+ * release that would have gone through.
+ */
+export function classify(r: Pick<RunResult, 'stdout' | 'stderr' | 'timedOut'>): Refusal | null {
+  if (r.timedOut) return null
+  const text = `${r.stderr}\n${r.stdout}`
+  if (/required agreement|agreement[^\n]*(missing|expired)/i.test(text)) {
+    return { kind: 'agreement', why: 'a required agreement is missing or has expired (HTTP 403)', action: AGREEMENT_ACTION }
+  }
+  if (/revoked|certificate[^\n]*(expired|not valid)/i.test(text)) {
+    return {
+      kind: 'certificate', why: 'the signing certificate was revoked or has expired',
+      action: 'Create a new Developer ID Application certificate at https://developer.apple.com/account, replace the signing secrets (dev/set-signing-secrets.sh), then re-run release.yml on the tag.',
+    }
+  }
+  if (/status code: 401|invalid credentials|unable to authenticate|invalid (username|password|app-specific)|no team found|team id[^\n]*(invalid|not valid)/i.test(text)) {
+    return {
+      kind: 'credentials', why: 'Apple refused the notarization credentials (HTTP 401)',
+      action: 'Check the APPLE_ID, APPLE_PASSWORD (an app-specific password) and APPLE_TEAM_ID secrets: make a new app-specific password at https://account.apple.com and store it, then re-run release.yml on the tag.',
+    }
+  }
+  if (/status code: 403/i.test(text)) {
+    return {
+      kind: 'forbidden', why: 'Apple answered 403 Forbidden',
+      action: 'Sign in at https://developer.apple.com/account and check that the membership is active and the account may notarize, then re-run release.yml on the tag.',
+    }
+  }
+  return null
+}
+
+/** The one-line outcome of a refusal, for the record, the log and the issue. */
+export function refusalSummary(name: string, f: Refusal): string {
+  return `${name}: NOT notarized, Apple refused: ${f.why}. Not retried, because retrying cannot help. Action: ${f.action}`
+}
 
 const IN_PROGRESS = 'In Progress'
 const FAILED = new Set(['Invalid', 'Rejected'])
@@ -84,7 +131,7 @@ export function describe(subs: Submission[]): string {
   return subs.map(s => `${s.id} ${s.status} (submission ${s.attempt})`).join(', ')
 }
 
-async function upload(o: Options, run: Run, clock: Clock, attempt: number): Promise<string | null> {
+async function upload(o: Options, run: Run, clock: Clock, attempt: number): Promise<string | Refusal | null> {
   for (let t = 1; t <= o.uploadTries; t++) {
     o.log(`Submission ${attempt}: uploading ${basename(o.file)} (try ${t} of ${o.uploadTries})`)
     const r = await run(['notarytool', 'submit', o.file, ...o.auth, '--output-format', 'json'], o.uploadMs)
@@ -94,15 +141,19 @@ async function upload(o: Options, run: Run, clock: Clock, attempt: number): Prom
       return id
     }
     o.log(`Submission ${attempt}: upload failed (${r.code === 0 && !r.timedOut ? 'no submission id in the answer' : firstLine(r)})`)
+    const refusal = r.code === 0 ? null : classify(r)
+    if (refusal) return refusal
     if (t < o.uploadTries) await clock.sleep(pick(o.uploadBackoffMs, t - 1))
   }
   return null
 }
 
-async function info(o: Options, run: Run, id: string): Promise<{ status: string; message: string } | null> {
+async function info(o: Options, run: Run, id: string): Promise<{ status: string; message: string } | Refusal | null> {
   const r = await run(['notarytool', 'info', id, ...o.auth, '--output-format', 'json'], o.commandMs)
   const v = r.code === 0 && !r.timedOut ? parse(r.stdout) : null
   if (!v || typeof v.status !== 'string') {
+    const refusal = r.code === 0 ? null : classify(r)
+    if (refusal) return refusal
     o.log(`Could not read the status of ${id} (${firstLine(r)}); asking again`)
     return null
   }
@@ -114,6 +165,12 @@ async function notaryLog(o: Options, run: Run, id: string): Promise<string> {
   return r.code === 0 && !r.timedOut ? r.stdout : `(could not read the log: ${firstLine(r)})`
 }
 
+function refused(name: string, refusal: Refusal, subs: Submission[], o: Options): Outcome {
+  const summary = refusalSummary(name, refusal)
+  o.log(summary)
+  return { ok: false, reason: 'refused', refusal, submissions: subs, summary }
+}
+
 export async function notarize(o: Options, run: Run, clock: Clock): Promise<Outcome> {
   const name = basename(o.file)
   const subs: Submission[] = []
@@ -121,6 +178,7 @@ export async function notarize(o: Options, run: Run, clock: Clock): Promise<Outc
 
   for (let attempt = 1; attempt <= o.attempts; attempt++) {
     const id = await upload(o, run, clock, attempt)
+    if (id && typeof id !== 'string') return refused(name, id, subs, o)
     if (id) subs.push({ id, status: IN_PROGRESS, attempt })
     const pending = () => subs.filter(s => s.status !== 'Accepted' && !FAILED.has(s.status))
     if (pending().length === 0) continue
@@ -130,6 +188,7 @@ export async function notarize(o: Options, run: Run, clock: Clock): Promise<Outc
       for (const s of pending()) {
         const got = await info(o, run, s.id)
         if (!got) continue
+        if ('action' in got) return refused(name, got, subs, o)
         if (got.status !== s.status) o.log(`${s.id}: ${got.status}`)
         s.status = got.status
         if (got.status === 'Accepted') {
