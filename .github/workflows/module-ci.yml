@@ -190,8 +190,15 @@ jobs:
         shell: bash
         run: |
           check=node_modules/kehikot-module-protocol/bin/check-agent.ts
-          if [ -f "$check" ]; then
+          version=$(jq -r .version node_modules/kehikot-module-protocol/package.json 2>/dev/null || echo 0)
+          if [ -f "$check" ] && [ "$(printf '%s\n2.108.2\n' "$version" | sort -V | head -1)" = 2.108.2 ]; then
             bun "$check" .
+          elif [ -f "$check" ]; then
+            # Before 2.108.2 the check took every module asking for agents:message
+            # to be an agent module, so one that only sends sessions a note
+            # failed it. Said, not failed, until it pins
+            # 2.108.2 or newer.
+            bun "$check" . || echo "::warning::The agent check of protocol $version misjudges a module that only sends messages. Pin kehikot-module-protocol 2.108.2 or newer to run the check that counts."
           elif grep -rqs "agents:message" manifest.ts manifest.js manifest.mjs; then
             echo "::warning::This module messages (agents:message) and its protocol is older than 2.95.0, so the agent conformance check cannot run. Pin kehikot-module-protocol 2.95.0 or newer and add the conformance test."
           else
