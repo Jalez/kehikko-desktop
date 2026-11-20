@@ -169,33 +169,13 @@ jobs:
             echo "commit=$commit"
           } >> "$GITHUB_OUTPUT"
 
+      # The release-notes gate (actions/notes-gate): the same rule module-ci
+      # holds a pull request to, in one place.
       - name: Read the release notes
         id: notes
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          file="notes/${VERSION}.md"
-          if [ ! -f "$file" ]; then
-            echo "::error file=$file::No release notes. Write $file: bullets on what a person notices in $VERSION (see notes/README.md)."
-            exit 1
-          fi
-          # Drop HTML comments, an optional leading "What's new" heading, the
-          # leading `Kind:` line (semver; module-ci checks it), and blank lines
-          # around the bullets.
-          body="$(perl -0pe 's/<!--.*?-->//gs; s/\A\s*#+\s*What.s new\s*\n//i; s/\A\s*[`*_]*kind[`*_]*[ \t]*:[^\n]*\n?//i; s/\A\s+//; s/\s+\z//' "$file")"
-          if ! printf '%s\n' "$body" | grep -Eq '^[[:space:]]*[-*] .*[[:alpha:]]{3}'; then
-            echo "::error file=$file::$file has no bullet points. Write bullets on what a person notices in $VERSION."
-            exit 1
-          fi
-          if printf '%s\n' "$body" | grep -Eiq '\b(TODO|TBD|FIXME|lorem ipsum|placeholder|write (this|here))\b|bug fixes and (performance )?improvements'; then
-            echo "::error file=$file::$file still has placeholder or generic text. Say what actually changed for a person."
-            exit 1
-          fi
-          {
-            echo 'whats_new<<KEHIKOT_NOTES_END'
-            printf '%s\n' "$body"
-            echo 'KEHIKOT_NOTES_END'
-          } >> "$GITHUB_OUTPUT"
+        uses: Jalez/kehikko-desktop/.github/actions/notes-gate@main
+        with:
+          version: ${{ steps.version.outputs.version }}
 
       # One line after the bullets: which Kehikot apps this release works with.
       # The module's protocol pin, against the protocol each app shipped: the
@@ -358,7 +338,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           COMMIT: ${{ steps.version.outputs.commit }}
           NAME: ${{ steps.manifest.outputs.name }}
-          WHATS_NEW: ${{ steps.notes.outputs.whats_new }}
+          WHATS_NEW: ${{ steps.notes.outputs.body }}
           WORKS_WITH: ${{ steps.works.outputs.line }}
           ARCHIVE: ${{ steps.bundle.outputs.archive }}
         run: |
